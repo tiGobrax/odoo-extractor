@@ -8,15 +8,19 @@ from xmlrpc.client import Transport
 
 class OdooClient:
     def __init__(self):
-        # --- Variáveis fixas (hardcoded) ---
-        base_url = "https://gobrax.odoo.com"
-        self.db = "gobrax-sh-main-22440471"
-        self.username = "odoo@gobrax.com"
-
-        # --- Apenas o password vem do ambiente ---
+        # --- Variáveis de ambiente ---
+        base_url = os.getenv("ODOO_URL", "https://gobrax.odoo.com")
+        self.db = os.getenv("ODOO_DB", "gobrax-sh-main-22440471")
+        self.username = os.getenv("ODOO_USERNAME", "odoo@gobrax.com")
         self.password = os.getenv("ODOO_PASSWORD")
+
+        # --- Validação de variáveis obrigatórias ---
         if not self.password:
             raise ValueError("Variável de ambiente ODOO_PASSWORD não configurada.")
+        if not self.db:
+            raise ValueError("Variável de ambiente ODOO_DB não configurada.")
+        if not self.username:
+            raise ValueError("Variável de ambiente ODOO_USERNAME não configurada.")
 
         # --- Força HTTPS e limpa barras extras ---
         if not base_url.startswith("https://"):

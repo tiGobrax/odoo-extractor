@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  odoo-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: odoo-extractor
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
