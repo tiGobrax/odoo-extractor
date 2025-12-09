@@ -11,6 +11,7 @@ from loguru import logger
 
 from src.odoo_extractor.odoo_client import OdooClient
 from src.storage import save_dataframe_to_gcs
+from src.utils import sanitize_records
 
 load_dotenv()
 
@@ -189,10 +190,6 @@ async def run_etl(
                 "results": []
             }
         
-        # Campos padrão
-        default_fields = ["id", "name"]
-        odoo_fields = fields or default_fields
-        
         # Inicializa cliente Odoo
         client = OdooClient()
         
@@ -206,7 +203,7 @@ async def run_etl(
                 records = client.search_read(
                     model=model,
                     domain=[],
-                    fields=odoo_fields,
+                    fields=fields or client.get_all_fields(model),
                     limit=limit
                 )
                 
@@ -221,7 +218,8 @@ async def run_etl(
                     continue
                 
                 # Conversão para DataFrame Polars
-                df = pl.DataFrame(records)
+                sanitized = sanitize_records(records)
+                df = pl.DataFrame(sanitized, strict=False)
                 
                 # Gravação em Parquet (GCS)
                 gcs_uri = save_dataframe_to_gcs(df, model)

@@ -6,6 +6,7 @@ from loguru import logger
 
 from src.odoo_extractor.odoo_client import OdooClient
 from src.storage import save_dataframe_to_gcs
+from src.utils import sanitize_records
 
 load_dotenv()
 
@@ -14,7 +15,7 @@ if __name__ == "__main__":
     client = OdooClient()
 
     model = os.getenv("ODOO_MODEL", "res.partner")
-    fields = ["id", "name", "email", "phone"]
+    fields = client.get_all_fields(model)
 
     # --- Extração de registros ---
     records = client.search_read(model=model, domain=[], fields=fields, limit=10)
@@ -24,7 +25,8 @@ if __name__ == "__main__":
         exit(0)
 
     # --- Conversão para DataFrame Polars ---
-    df = pl.DataFrame(records)
+    sanitized = sanitize_records(records)
+    df = pl.DataFrame(sanitized, strict=False)
     logger.success(f"✅ {df.shape[0]} registros extraídos de {model}")
 
     # --- Gravação em Parquet no GCS ---

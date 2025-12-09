@@ -23,6 +23,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copia código da aplicação
 COPY src/ ./src/
+COPY app/ ./app/
+COPY start.sh ./start.sh
 
 # Cria usuário não-root para segurança
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
@@ -36,5 +38,5 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 
-# Ponto de entrada
-CMD ["python", "-m", "src.main"]
+# Ponto de entrada (usa PORT, padrão 8000)
+CMD ["./start.sh"]

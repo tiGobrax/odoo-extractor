@@ -70,6 +70,10 @@ Todos os datasets extraídos são enviados diretamente para o Google Cloud Stora
 
 O projeto **não remove arquivos do GCS**, apenas adiciona novos Parquet a cada execução.
 
+Todo arquivo inclui a coluna `ingestion_ts` em UTC (ISO 8601), permitindo filtrar facilmente o lote mais recente na camada silver.
+
+Campos complexos (listas/dicionários retornados por relacionamentos do Odoo) são serializados como JSON para evitar inconsistências de tipo entre registros.
+
 Para rodar em Docker, monte o JSON da service account no container e aponte `GOOGLE_APPLICATION_CREDENTIALS` para o caminho interno. O `docker-compose.yml` de exemplo já expõe o segredo via volume somente leitura (`./odoo-etl@gobrax-data.iam.gserviceaccount.com.json:/app/creds/odoo-etl.json:ro`).
 
 ## 🏃 Rodar com Docker (Passo a Passo)
@@ -97,15 +101,15 @@ cp env.example .env
 **Opção A: API (FastAPI com Uvicorn)**
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-A API estará disponível em `http://127.0.0.1:8000`
+A API estará disponível em `http://127.0.0.1:8000` (o container usa a variável `PORT`, padrão `8000`).
 
-**Opção B: Script direto**
+**Opção B: Script direto (job)**
 
 ```bash
-docker-compose run --rm odoo-extractor python -m src.main
+docker compose run --rm odoo-extractor python -m src.main
 ```
 
 ### 4. Testar a API (se usando Opção A)
@@ -137,6 +141,29 @@ docker-compose run --rm odoo-extractor python -m src.main
 
 Os Parquet serão enviados automaticamente para `gs://<GCS_BUCKET>/<GCS_BASE_PATH>/<model>/`.
 
+## ☁️ Deploy no Cloud Run
+
+O container já inicia servindo a API FastAPI via Uvicorn e respeita a variável `PORT` (Cloud Run usa 8080). Passos gerais:
+
+1. Faça o build e envie para o Artifact Registry:
+   ```bash
+   gcloud builds submit --tag REGION-docker.pkg.dev/PROJETO/REPO/odoo-extractor
+   ```
+2. Faça o deploy da API:
+   ```bash
+   gcloud run deploy odoo-extractor-api \\
+     --image REGION-docker.pkg.dev/PROJETO/REPO/odoo-extractor \\
+     --platform managed --region REGION \\
+     --service-account SERVICE_ACCOUNT@PROJETO.iam.gserviceaccount.com \\
+     --set-env-vars ODOO_URL=...,ODOO_DB=...,ODOO_USERNAME=...,ODOO_PASSWORD=..., \\
+                     GCS_BUCKET=...,GCS_BASE_PATH=data-lake/odoo,API_TOKEN=..., \\
+                     GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json \\
+     --port 8080
+   ```
+3. Disponibilize o JSON da service account via Secret Manager ou monte como volume/secret (`--volume`/`--mount-path=/app/creds/odoo-etl.json`). Em ambientes com Workload Identity, basta conceder `roles/storage.objectAdmin` para a service account do serviço.
+
+Para execuções batch (equivalente a `python -m src.main`), crie um Cloud Run Job reutilizando a mesma imagem e comando `python -m src.main`, ou acione o endpoint `/etl/run` via DAG (Composer/Airflow) usando `Authorization: Bearer <API_TOKEN>`.
+
 ### Uso Programático
 
 ```python
@@ -148,7 +175,7 @@ client = OdooClient()
 records = client.search_read(
     model="res.partner",
     domain=[],  # Filtros Odoo
-    fields=["id", "name", "email", "phone"],
+    fields=client.get_all_fields("res.partner"),  # retorna todos os campos disponíveis
     batch_size=5000,
     limit=None  # None para extrair todos
 )
@@ -162,7 +189,7 @@ df = pl.DataFrame(records)
 
 - `model` (str): Nome do modelo Odoo (ex: `res.partner`, `sale.order`)
 - `domain` (list): Lista de filtros no formato Odoo (ex: `[('active', '=', True)]`)
-- `fields` (list)`: Lista de campos a serem extraídos
+- `fields` (list)`: Lista de campos a serem extraídos. Se `None`, usamos `client.get_all_fields(model)` para buscar todos os campos disponíveis.
 - `batch_size` (int): Tamanho do lote para paginação (padrão: 5000)
 - `limit` (int, opcional): Limite máximo de registros a extrair
 

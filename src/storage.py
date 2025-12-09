@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import polars as pl
@@ -18,12 +18,11 @@ def _get_storage_client() -> storage.Client:
     return _storage_client
 
 
-def _build_object_name(model: str) -> str:
+def _build_object_name(model: str, timestamp_str: str) -> str:
     """Monta o caminho do objeto dentro do bucket."""
     base_path = os.getenv("GCS_BASE_PATH", "data-lake/odoo").strip("/")
     safe_model_name = model.replace(".", "_")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{base_path}/{safe_model_name}/{timestamp}.parquet"
+    return f"{base_path}/{safe_model_name}/{timestamp_str}.parquet"
 
 
 def save_dataframe_to_gcs(df: pl.DataFrame, model: str) -> str:
@@ -41,7 +40,13 @@ def save_dataframe_to_gcs(df: pl.DataFrame, model: str) -> str:
     if not bucket_name:
         raise ValueError("Variável de ambiente GCS_BUCKET não configurada.")
 
-    object_name = _build_object_name(model)
+    now = datetime.now(timezone.utc)
+    object_timestamp = now.strftime("%Y%m%d_%H%M%S")
+    ingestion_ts = now.isoformat()
+
+    df_to_save = df.with_columns(pl.lit(ingestion_ts).alias("ingestion_ts"))
+
+    object_name = _build_object_name(model, object_timestamp)
     client = _get_storage_client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(object_name)
@@ -49,7 +54,7 @@ def save_dataframe_to_gcs(df: pl.DataFrame, model: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         temp_path = tmp.name
 
-    df.write_parquet(temp_path)
+    df_to_save.write_parquet(temp_path)
 
     try:
         blob.upload_from_filename(temp_path)

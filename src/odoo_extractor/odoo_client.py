@@ -94,6 +94,23 @@ class OdooClient:
             ]
         )
 
+    def get_all_fields(self, model: str):
+        """Retorna todos os campos disponíveis para um model."""
+        try:
+            metadata = self.models.execute_kw(
+                self.db,
+                self.uid,
+                self.password,
+                model,
+                "fields_get",
+                [],
+                {"attributes": ["string"]},
+            )
+            return list(metadata.keys())
+        except Exception as e:
+            logger.error(f"❌ Erro ao listar campos de {model}: {e}")
+            raise
+
     def search_read(self, model: str, domain: list, fields: list, batch_size: int = 5000, limit: int = None):
         """Executa search_read com paginação automática, retry inteligente e categorização de erros."""
         try:
