@@ -1,9 +1,11 @@
-from src.odoo_extractor.odoo_client import OdooClient
-from loguru import logger
-from dotenv import load_dotenv
 import os
+
 import polars as pl
-from datetime import datetime
+from dotenv import load_dotenv
+from loguru import logger
+
+from src.odoo_extractor.odoo_client import OdooClient
+from src.storage import save_dataframe_to_gcs
 
 load_dotenv()
 
@@ -25,15 +27,9 @@ if __name__ == "__main__":
     df = pl.DataFrame(records)
     logger.success(f"✅ {df.shape[0]} registros extraídos de {model}")
 
-    # --- Gravação em Parquet ---
-    output_dir = "data"
-    os.makedirs(output_dir, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    parquet_path = f"{output_dir}/{model.replace('.', '_')}_{timestamp}.parquet"
-
-    df.write_parquet(parquet_path)
-    logger.info(f"💾 Dados salvos em {parquet_path}")
+    # --- Gravação em Parquet no GCS ---
+    gcs_uri = save_dataframe_to_gcs(df, model)
+    logger.info(f"💾 Dados salvos em {gcs_uri}")
 
     # --- Exibição de amostra ---
     logger.info("📊 Prévia dos dados extraídos:")

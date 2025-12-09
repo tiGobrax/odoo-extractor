@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from loguru import logger
-from dotenv import load_dotenv
-import os
 import csv
+import os
 from pathlib import Path
-from typing import Optional, List
-from src.odoo_extractor.odoo_client import OdooClient
+from typing import List, Optional
+
 import polars as pl
-from datetime import datetime
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from loguru import logger
+
+from src.odoo_extractor.odoo_client import OdooClient
+from src.storage import save_dataframe_to_gcs
 
 load_dotenv()
 
@@ -194,13 +196,7 @@ async def run_etl(
         # Inicializa cliente Odoo
         client = OdooClient()
         
-        # Diretório de saída
-        output_dir = Path("data")
-        output_dir.mkdir(exist_ok=True)
-        
         results = []
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         # Processa cada model
         for model in models_to_process:
             try:
@@ -227,18 +223,16 @@ async def run_etl(
                 # Conversão para DataFrame Polars
                 df = pl.DataFrame(records)
                 
-                # Gravação em Parquet
-                safe_model_name = model.replace('.', '_')
-                parquet_path = output_dir / f"{safe_model_name}_{timestamp}.parquet"
-                df.write_parquet(str(parquet_path))
+                # Gravação em Parquet (GCS)
+                gcs_uri = save_dataframe_to_gcs(df, model)
                 
-                logger.success(f"✅ {model}: {len(records)} registros extraídos -> {parquet_path}")
+                logger.success(f"✅ {model}: {len(records)} registros extraídos -> {gcs_uri}")
                 
                 results.append({
                     "model": model,
                     "status": "success",
                     "records_count": len(records),
-                    "file_path": str(parquet_path)
+                    "file_path": gcs_uri
                 })
                 
             except Exception as e:

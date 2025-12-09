@@ -10,5 +10,6 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./odoo-etl@gobrax-data.iam.gserviceaccount.com.json:/app/creds/odoo-etl.json:ro
     restart: "no"
 

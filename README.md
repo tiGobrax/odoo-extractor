@@ -22,34 +22,7 @@ Extrator de dados do Odoo usando XML-RPC, com suporte a paginação automática,
 - Conta no Odoo com acesso à API
 - Variáveis de ambiente configuradas (veja `.env.example`)
 
-## 🔧 Instalação
-
-### Instalação Local
-
-1. Clone o repositório:
-```bash
-git clone https://github.com/tiGobrax/odoo-extractor
-cd odoo-extractor
-```
-
-2. Crie um ambiente virtual:
-```bash
-python -m venv .venv
-source .venv/bin/activate  # No Windows: .venv\Scripts\activate
-```
-
-3. Instale as dependências:
-```bash
-pip install -r requirements.txt
-```
-
-4. Configure as variáveis de ambiente:
-```bash
-cp .env.example .env
-# Edite o arquivo .env com suas credenciais
-```
-
-### Instalação com Docker
+## 🔧 Execução com Docker
 
 ```bash
 docker-compose up --build
@@ -83,8 +56,23 @@ ODOO_MODEL=res.partner
 | `ODOO_USERNAME` | Usuário para autenticação | Sim | - |
 | `ODOO_PASSWORD` | API Key ou senha | Sim | - |
 | `ODOO_MODEL` | Modelo a ser extraído | Não | `res.partner` |
+| `GCS_BUCKET` | Bucket do Google Cloud Storage utilizado para salvar os Parquet | Sim | - |
+| `GCS_BASE_PATH` | Prefixo dentro do bucket (cada model vira uma subpasta) | Não | `data-lake/odoo` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Caminho para o JSON da service account com acesso ao bucket | Sim | - |
 
-## 🏃 Rodar Localmente (Passo a Passo)
+## ☁️ Armazenamento no Google Cloud Storage
+
+Todos os datasets extraídos são enviados diretamente para o Google Cloud Storage. Cada model recebe sua própria pasta abaixo do prefixo configurado (`GCS_BASE_PATH`), por exemplo:
+
+- `gs://gobrax-data-lake/data-lake/odoo/stock_lot/<timestamp>.parquet`
+- `gs://gobrax-data-lake/data-lake/odoo/account_account/<timestamp>.parquet`
+- `gs://gobrax-data-lake/data-lake/odoo/crm_stage/<timestamp>.parquet`
+
+O projeto **não remove arquivos do GCS**, apenas adiciona novos Parquet a cada execução.
+
+Para rodar em Docker, monte o JSON da service account no container e aponte `GOOGLE_APPLICATION_CREDENTIALS` para o caminho interno. O `docker-compose.yml` de exemplo já expõe o segredo via volume somente leitura (`./odoo-etl@gobrax-data.iam.gserviceaccount.com.json:/app/creds/odoo-etl.json:ro`).
+
+## 🏃 Rodar com Docker (Passo a Passo)
 
 ### 1. Clone o repositório
 
@@ -93,27 +81,7 @@ git clone https://github.com/tiGobrax/odoo-extractor
 cd odoo-extractor
 ```
 
-### 2. Crie e ative o ambiente virtual
-
-**Linux/Mac:**
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-**Windows:**
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-### 3. Instale as dependências
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure as variáveis de ambiente
+### 2. Configure as variáveis de ambiente
 
 Copie o arquivo de exemplo e edite com suas credenciais:
 
@@ -122,12 +90,14 @@ cp env.example .env
 # Edite o arquivo .env com suas credenciais do Odoo
 ```
 
-### 5. Execute a aplicação
+> 💡 Posicione o arquivo JSON da service account na raiz do projeto e mantenha o nome configurado no `docker-compose.yml` (ou ajuste o volume) para que o container consiga ler `GOOGLE_APPLICATION_CREDENTIALS`.
+
+### 3. Execute a aplicação
 
 **Opção A: API (FastAPI com Uvicorn)**
 
 ```bash
-uvicorn app.main:app --reload
+docker-compose up --build
 ```
 
 A API estará disponível em `http://127.0.0.1:8000`
@@ -135,10 +105,10 @@ A API estará disponível em `http://127.0.0.1:8000`
 **Opção B: Script direto**
 
 ```bash
-python -m src.main
+docker-compose run --rm odoo-extractor python -m src.main
 ```
 
-### 6. Testar a API (se usando Opção A)
+### 4. Testar a API (se usando Opção A)
 
 Execute uma requisição para o endpoint de ETL:
 
@@ -149,7 +119,7 @@ curl -X POST "http://127.0.0.1:8000/etl/run" \
 
 **Nota:** Substitua `meu_token` pelo token de autenticação válido.
 
-### 7. Documentação da API (se usando FastAPI)
+### 5. Documentação da API (se usando FastAPI)
 
 Acesse a documentação interativa em:
 - Swagger UI: `http://127.0.0.1:8000/docs`
@@ -159,11 +129,13 @@ Acesse a documentação interativa em:
 
 ### Uso Básico
 
-Execute o script principal:
+Execute o script principal (dentro do container):
 
 ```bash
-python -m src.main
+docker-compose run --rm odoo-extractor python -m src.main
 ```
+
+Os Parquet serão enviados automaticamente para `gs://<GCS_BUCKET>/<GCS_BASE_PATH>/<model>/`.
 
 ### Uso Programático
 
