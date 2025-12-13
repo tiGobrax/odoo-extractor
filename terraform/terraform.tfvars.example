@@ -1,0 +1,25 @@
+project_id  = "gobrax-data"
+region      = "us-central1"
+environment = "prod"
+
+container_image        = "us-central1-docker.pkg.dev/gobrax-data/odoo-extractor/odoo-extractor:latest"
+cloud_run_service_name = "odoo-extractor"
+service_account_name   = "odoo-extractor-api"
+artifact_registry_repo = "odoo-extractor"
+
+odoo_url      = "https://gobrax.odoo.com"
+odoo_db       = "gobrax-sh-main-22440471"
+odoo_username = "odoo@gobrax.com"
+odoo_password = "COLAR_API_KEY_AQUI"
+
+api_token  = "meu_token"
+gcs_bucket = "gobrax-data-lake"
+
+# Opcionalmente ajuste caminhos/infra
+#gcs_base_path              = "data-lake/odoo"
+#odoo_password_secret_name  = "odoo-password"
+#min_instance_count         = 0
+#max_instance_count         = 3
+#request_timeout_seconds    = 300
+#allow_unauthenticated      = true
+#invoker_identity           = "serviceAccount:algum-usuario@projeto.iam.gserviceaccount.com"

@@ -143,26 +143,87 @@ Os Parquet serão enviados automaticamente para `gs://<GCS_BUCKET>/<GCS_BASE_PAT
 
 ## ☁️ Deploy no Cloud Run
 
-O container já inicia servindo a API FastAPI via Uvicorn e respeita a variável `PORT` (Cloud Run usa 8080). Passos gerais:
+O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliza a porta definida pela variável `PORT` (Cloud Run define `PORT=8080`). Use o fluxo abaixo para garantir que a imagem publicada está alinhada com o que está no repositório:
 
-1. Faça o build e envie para o Artifact Registry:
+1. **Build e push da imagem para o Artifact Registry**
    ```bash
-   gcloud builds submit --tag REGION-docker.pkg.dev/PROJETO/REPO/odoo-extractor
+   export PROJECT_ID=gobrax-data           # ajuste conforme o seu projeto
+   export REGION=us-central1
+   export REPO=odoo-extractor
+   export IMAGE_NAME=odoo-extractor
+
+   gcloud builds submit \
+     --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest
    ```
-2. Faça o deploy da API:
+
+2. **Service Account e permissões**
    ```bash
-   gcloud run deploy odoo-extractor-api \\
-     --image REGION-docker.pkg.dev/PROJETO/REPO/odoo-extractor \\
-     --platform managed --region REGION \\
-     --service-account SERVICE_ACCOUNT@PROJETO.iam.gserviceaccount.com \\
-     --set-env-vars ODOO_URL=...,ODOO_DB=...,ODOO_USERNAME=...,ODOO_PASSWORD=..., \\
-                     GCS_BUCKET=...,GCS_BASE_PATH=data-lake/odoo,API_TOKEN=..., \\
-                     GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json \\
-     --port 8080
+   gcloud iam service-accounts create odoo-extractor \
+     --display-name="Service Account do Extrator Odoo"
+
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member="serviceAccount:odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com" \
+     --role="roles/storage.objectAdmin"
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member="serviceAccount:odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com" \
+     --role="roles/secretmanager.secretAccessor"
    ```
-3. Disponibilize o JSON da service account via Secret Manager ou monte como volume/secret (`--volume`/`--mount-path=/app/creds/odoo-etl.json`). Em ambientes com Workload Identity, basta conceder `roles/storage.objectAdmin` para a service account do serviço.
+
+3. **Secrets e variáveis sensíveis**
+   ```bash
+   printf 'MINHA_API_KEY' | gcloud secrets create odoo-password --data-file=-
+   gcloud secrets add-iam-policy-binding projects/${PROJECT_ID}/secrets/odoo-password \
+     --member="serviceAccount:odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com" \
+     --role="roles/secretmanager.secretAccessor"
+   ```
+   Configure os demais valores (URL, banco, usuário, bucket, token da API) via `--set-env-vars`. Para o `ODOO_PASSWORD`, prefira `--set-secrets`, evitando expor o valor.
+
+4. **Deploy da API**
+   ```bash
+   gcloud run deploy odoo-extractor \
+     --image ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE_NAME}:latest \
+     --region ${REGION} --platform managed --allow-unauthenticated \
+     --service-account odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com \
+     --set-env-vars ODOO_URL=https://gobrax.odoo.com, \
+                    ODOO_DB=gobrax-sh-main-22440471, \
+                    ODOO_USERNAME=odoo@gobrax.com, \
+                    GCS_BUCKET=gobrax-data-lake, \
+                    GCS_BASE_PATH=data-lake/odoo, \
+                    API_TOKEN=meu_token \
+     --set-secrets ODOO_PASSWORD=odoo-password:latest
+   ```
+   > Não defina `GOOGLE_APPLICATION_CREDENTIALS` se estiver usando a service account do Cloud Run; o client do GCS utiliza Workload Identity automaticamente.
+
+5. **Observabilidade e troubleshooting**
+   - Logs do último deploy:  
+     `gcloud run services describe odoo-extractor --region ${REGION} --format='value(status.latestReadyRevisionName)'`  
+     `gcloud run logs read odoo-extractor --region ${REGION} --revision <revision>`
+   - Quando o erro for “container failed to start”, quase sempre existe um stack trace nos logs de execução indicando variável ausente ou exceção do Python.
 
 Para execuções batch (equivalente a `python -m src.main`), crie um Cloud Run Job reutilizando a mesma imagem e comando `python -m src.main`, ou acione o endpoint `/etl/run` via DAG (Composer/Airflow) usando `Authorization: Bearer <API_TOKEN>`.
+
+## 🧱 Provisionamento com Terraform
+
+Se preferir automatizar toda a infraestrutura GCP (Artifact Registry, Secret Manager, service account e Cloud Run), utilize os manifests em `terraform/`.
+
+1. Configure a autenticação local (`gcloud auth application-default login` ou `GOOGLE_APPLICATION_CREDENTIALS`).
+2. Copie o arquivo de variáveis e edite com seus valores:
+   ```bash
+   cd terraform
+   cp terraform.tfvars.example terraform.tfvars
+   # edite o arquivo e substitua tokens/senhas
+   ```
+3. Inicialize e valide:
+   ```bash
+   terraform init
+   terraform plan
+   ```
+4. Caso o plano esteja correto, aplique:
+   ```bash
+   terraform apply
+   ```
+
+O módulo habilita as APIs necessárias, cria (ou confirma) o repositório do Artifact Registry, provisiona a service account com as permissões corretas, cadastra o segredo `odoo-password` e implanta o Cloud Run já apontando para a imagem informada. Ajuste `allow_unauthenticated=false` se quiser proteger o endpoint e forneça um `invoker_identity` para controle fino de acesso.
 
 ### Uso Programático
 

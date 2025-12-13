@@ -4,7 +4,7 @@ import polars as pl
 from dotenv import load_dotenv
 from loguru import logger
 
-from src.odoo_extractor.odoo_client import OdooClient
+from src.odoo_extractor.odoo_client import ModelExtractionError, OdooClient
 from src.storage import save_dataframe_to_gcs
 from src.utils import sanitize_records
 
@@ -18,7 +18,11 @@ if __name__ == "__main__":
     fields = client.get_all_fields(model)
 
     # --- Extração de registros ---
-    records = client.search_read(model=model, domain=[], fields=fields, limit=10)
+    try:
+        records = client.search_read(model=model, domain=[], fields=fields, limit=10)
+    except ModelExtractionError as err:
+        logger.error(f"❌ Model {model} ignorado: {err.reason}")
+        raise SystemExit(1)
 
     if not records:
         logger.warning(f"⚠️ Nenhum registro encontrado no modelo {model}.")

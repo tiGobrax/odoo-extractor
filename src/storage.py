@@ -18,14 +18,23 @@ def _get_storage_client() -> storage.Client:
     return _storage_client
 
 
-def _build_object_name(model: str, timestamp_str: str) -> str:
+def _build_object_name(model: str, timestamp_str: str, chunk_suffix: Optional[str] = None) -> str:
     """Monta o caminho do objeto dentro do bucket."""
     base_path = os.getenv("GCS_BASE_PATH", "data-lake/odoo").strip("/")
     safe_model_name = model.replace(".", "_")
-    return f"{base_path}/{safe_model_name}/{timestamp_str}.parquet"
+    file_name = timestamp_str
+    if chunk_suffix:
+        file_name = f"{timestamp_str}_{chunk_suffix}"
+    return f"{base_path}/{safe_model_name}/{file_name}.parquet"
 
 
-def save_dataframe_to_gcs(df: pl.DataFrame, model: str) -> str:
+def save_dataframe_to_gcs(
+    df: pl.DataFrame,
+    model: str,
+    *,
+    object_timestamp: Optional[str] = None,
+    chunk_index: Optional[int] = None,
+) -> str:
     """
     Persiste um DataFrame no Google Cloud Storage.
 
@@ -41,12 +50,16 @@ def save_dataframe_to_gcs(df: pl.DataFrame, model: str) -> str:
         raise ValueError("Variável de ambiente GCS_BUCKET não configurada.")
 
     now = datetime.now(timezone.utc)
-    object_timestamp = now.strftime("%Y%m%d_%H%M%S")
+    timestamp_str = object_timestamp or now.strftime("%Y%m%d_%H%M%S")
     ingestion_ts = now.isoformat()
 
     df_to_save = df.with_columns(pl.lit(ingestion_ts).alias("ingestion_ts"))
 
-    object_name = _build_object_name(model, object_timestamp)
+    chunk_suffix = None
+    if chunk_index is not None:
+        chunk_suffix = f"chunk{chunk_index:04d}"
+
+    object_name = _build_object_name(model, timestamp_str, chunk_suffix)
     client = _get_storage_client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(object_name)

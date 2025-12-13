@@ -1,5 +1,6 @@
 import csv
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -9,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 
-from src.odoo_extractor.odoo_client import OdooClient
+from src.odoo_extractor.odoo_client import ModelExtractionError, OdooClient
 from src.storage import save_dataframe_to_gcs
 from src.utils import sanitize_records
 
@@ -150,6 +151,7 @@ async def run_etl(
     prefix: Optional[str] = None,
     fields: Optional[List[str]] = None,
     limit: Optional[int] = None,
+    batch_size: Optional[int] = None,
     token: HTTPAuthorizationCredentials = Depends(verify_token)
 ):
     """
@@ -189,6 +191,12 @@ async def run_etl(
                 "processed_models": 0,
                 "results": []
             }
+
+        # Define batch size efetivo
+        env_batch_size = int(os.getenv("ODOO_BATCH_SIZE", "2000"))
+        effective_batch_size = batch_size or env_batch_size
+        if effective_batch_size <= 0:
+            raise HTTPException(status_code=400, detail="batch_size deve ser maior que zero.")
         
         # Inicializa cliente Odoo
         client = OdooClient()
@@ -199,40 +207,75 @@ async def run_etl(
             try:
                 logger.info(f"📊 Processando model: {model}")
                 
-                # Extração de registros
-                records = client.search_read(
+                model_fields = fields if fields else client.get_all_fields(model)
+                chunk_paths: List[str] = []
+                chunk_index = 1
+                model_records = 0
+                timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+                # Extração de registros em lotes
+                for batch in client.iter_batches(
                     model=model,
                     domain=[],
-                    fields=fields or client.get_all_fields(model),
+                    fields=model_fields,
+                    batch_size=effective_batch_size,
                     limit=limit
-                )
-                
-                if not records:
+                ):
+                    if not batch:
+                        continue
+
+                    sanitized = sanitize_records(batch)
+                    if not sanitized:
+                        continue
+
+                    df = pl.DataFrame(sanitized, strict=False)
+
+                    # Gravação em Parquet (GCS) por lote
+                    gcs_uri = save_dataframe_to_gcs(
+                        df,
+                        model,
+                        object_timestamp=timestamp_str,
+                        chunk_index=chunk_index
+                    )
+
+                    chunk_paths.append(gcs_uri)
+                    model_records += len(batch)
+                    chunk_index += 1
+
+                if not chunk_paths:
                     logger.warning(f"⚠️ Nenhum registro encontrado no model {model}")
                     results.append({
                         "model": model,
                         "status": "empty",
                         "records_count": 0,
-                        "file_path": None
+                        "file_path": None,
+                        "file_paths": []
                     })
                     continue
-                
-                # Conversão para DataFrame Polars
-                sanitized = sanitize_records(records)
-                df = pl.DataFrame(sanitized, strict=False)
-                
-                # Gravação em Parquet (GCS)
-                gcs_uri = save_dataframe_to_gcs(df, model)
-                
-                logger.success(f"✅ {model}: {len(records)} registros extraídos -> {gcs_uri}")
-                
+
+                logger.success(
+                    f"✅ {model}: {model_records} registros extraídos em {len(chunk_paths)} arquivos"
+                )
+
                 results.append({
                     "model": model,
                     "status": "success",
-                    "records_count": len(records),
-                    "file_path": gcs_uri
+                    "records_count": model_records,
+                    "files_count": len(chunk_paths),
+                    "file_paths": chunk_paths,
+                    "file_path": chunk_paths[-1]
                 })
                 
+            except ModelExtractionError as e:
+                logger.warning(f"⚠️ Model {model} ignorado: {e.reason}")
+                results.append({
+                    "model": model,
+                    "status": "skipped",
+                    "error": e.reason,
+                    "records_count": 0,
+                    "file_path": None
+                })
+                continue
             except Exception as e:
                 logger.error(f"❌ Erro ao processar model {model}: {e}")
                 results.append({
@@ -248,10 +291,11 @@ async def run_etl(
         successful = sum(1 for r in results if r['status'] == 'success')
         failed = sum(1 for r in results if r['status'] == 'error')
         empty = sum(1 for r in results if r['status'] == 'empty')
+        skipped = sum(1 for r in results if r['status'] == 'skipped')
         total_records = sum(r.get('records_count', 0) for r in results)
         
         logger.success(
-            f"✅ Extração concluída: {successful} sucesso, {empty} vazios, {failed} erros. "
+            f"✅ Extração concluída: {successful} sucesso, {empty} vazios, {skipped} ignorados, {failed} erros. "
             f"Total de registros: {total_records}"
         )
         
@@ -262,6 +306,7 @@ async def run_etl(
             "total_models": len(models_to_process),
             "successful": successful,
             "empty": empty,
+            "skipped": skipped,
             "failed": failed,
             "total_records": total_records,
             "results": results

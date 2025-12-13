@@ -6,6 +6,16 @@ from loguru import logger
 from xmlrpc.client import Transport
 
 
+class ModelExtractionError(Exception):
+    """Erro controlado indicando que um model não pode ser processado."""
+
+    def __init__(self, model: str, reason: str, *, category: str = "unknown"):
+        super().__init__(reason)
+        self.model = model
+        self.reason = reason
+        self.category = category
+
+
 class OdooClient:
     def __init__(self):
         # --- Variáveis de ambiente ---
@@ -80,19 +90,46 @@ class OdooClient:
 
     def _is_permanent_schema_error(self, err: Exception) -> bool:
         """Identifica erros permanentes relacionados a schema ou payload inválido"""
+        message = str(err)
         return any(
-            msg in str(err)
-            for msg in [
-                "Invalid field",
-                "Unknown field",
-                "Unknown model",
+            token.lower() in message.lower()
+            for token in [
+                "invalid field",
+                "unknown field",
+                "unknown model",
                 "does not exist",
-                "Permission denied",
+                "permission denied",
                 "dictionary key must be string",
-                "psycopg2.errors.SyntaxError",  # <--- adiciona este
-                "FROM (0) AS", 
+                "psycopg2.errors.syntaxerror",
+                "from (0) as",
+                "notimplementederror",
+                "operator does not exist",
             ]
         )
+
+    def _summarize_error(self, model: str, err: Exception) -> str:
+        """Gera mensagem curta e amigável para logs/retorno"""
+        if isinstance(err, xmlrpc.client.Fault):
+            message = err.faultString or str(err)
+        else:
+            message = str(err)
+
+        normalized = message.lower()
+        if "notimplementederror" in normalized:
+            return f"O model {model} não implementa busca (NotImplementedError)."
+        if "operator does not exist" in normalized:
+            return "Erro de schema no Postgres: operator inexistente para o tipo solicitado."
+        if "dictionary key must be string" in normalized:
+            return "Estrutura retornada pelo Odoo possui chaves inválidas."
+        if "unknown field" in normalized:
+            return "Campo solicitado não existe no model."
+        if "permission denied" in normalized:
+            return "Usuário/API Key sem permissão para ler este model."
+
+        lines = [line.strip().strip("'") for line in message.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+        return message or "Erro desconhecido"
 
     def get_all_fields(self, model: str):
         """Retorna todos os campos disponíveis para um model."""
@@ -111,16 +148,28 @@ class OdooClient:
             logger.error(f"❌ Erro ao listar campos de {model}: {e}")
             raise
 
-    def search_read(self, model: str, domain: list, fields: list, batch_size: int = 5000, limit: int = None):
-        """Executa search_read com paginação automática, retry inteligente e categorização de erros."""
+    def _search_read_batches(
+        self,
+        model: str,
+        domain: list,
+        fields: list,
+        batch_size: int = 5000,
+        limit: int = None,
+    ):
+        """Generator que executa search_read em lotes, respeitando limite e repetindo em caso de falha."""
         try:
-            all_records = []
             offset = 0
+            fetched = 0
 
             while True:
-                kwargs = {"fields": fields, "limit": batch_size, "offset": offset}
-                if limit and offset + batch_size > limit:
-                    kwargs["limit"] = max(0, limit - offset)
+                current_limit = batch_size
+                if limit is not None:
+                    remaining = max(limit - fetched, 0)
+                    if remaining <= 0:
+                        break
+                    current_limit = min(batch_size, remaining)
+
+                kwargs = {"fields": fields, "limit": current_limit, "offset": offset}
 
                 for attempt in range(3):
                     try:
@@ -134,40 +183,61 @@ class OdooClient:
                             kwargs,
                         )
                         break  # sucesso
+                    except ModelExtractionError:
+                        raise
                     except Exception as e:
+                        reason = self._summarize_error(model, e)
+
                         # Falha de schema (permanente)
                         if self._is_permanent_schema_error(e):
-                            logger.warning(f"⚙️ Modelo {model} ignorado (erro de schema: {e}).")
-                            return []
+                            logger.warning(f"⚙️ Modelo {model} ignorado: {reason}")
+                            raise ModelExtractionError(model, reason, category="schema")
 
                         # Falha temporária (timeout, rede, etc.)
                         if self._is_temporary_error(e):
-                            logger.warning(f"⏳ Tentativa {attempt+1}/3 falhou em {model} (erro temporário): {e}")
+                            logger.warning(
+                                f"⏳ Tentativa {attempt+1}/3 falhou em {model} (erro temporário): {reason}"
+                            )
                             time.sleep(5 * (attempt + 1))
                             self._init_connections()
                             continue
 
                         # Falha desconhecida — considera permanente
-                        logger.error(f"❌ Erro inesperado em {model}: {e}")
-                        return []
+                        logger.error(f"❌ Erro inesperado em {model}: {reason}")
+                        raise ModelExtractionError(model, reason, category="unexpected")
                 else:
-                    logger.error(f"🚨 Falha após 3 tentativas em {model}. Pulando este modelo.")
-                    return all_records
+                    reason = "Falha após 3 tentativas (erros temporários consecutivos)."
+                    logger.error(f"🚨 {reason} em {model}.")
+                    raise ModelExtractionError(model, reason, category="temporary")
 
                 if not batch:
                     break
 
-                all_records.extend(batch)
-                offset += batch_size
-                logger.info(f"📦 {len(batch)} registros carregados (total: {len(all_records)})")
+                fetched += len(batch)
+                offset += len(batch)
+                logger.info(f"📦 {len(batch)} registros carregados (total: {fetched})")
 
-                if limit and len(all_records) >= limit:
-                    all_records = all_records[:limit]
+                yield batch
+
+                if limit is not None and fetched >= limit:
                     break
 
-            logger.success(f"✅ Extração concluída: {len(all_records)} registros de {model}")
-            return all_records
-
+        except ModelExtractionError:
+            raise
         except Exception as e:
-            logger.error(f"💥 Erro fatal ao buscar dados de {model}: {e}")
-            return []
+            reason = self._summarize_error(model, e)
+            logger.error(f"💥 Erro fatal ao buscar dados de {model}: {reason}")
+            raise ModelExtractionError(model, reason, category="fatal") from e
+
+    def iter_batches(self, model: str, domain: list, fields: list, batch_size: int = 5000, limit: int = None):
+        """Expõe os lotes de registros do search_read como um iterador."""
+        yield from self._search_read_batches(model, domain, fields, batch_size, limit)
+
+    def search_read(self, model: str, domain: list, fields: list, batch_size: int = 5000, limit: int = None):
+        """Executa search_read retornando todos os registros em memória (compatibilidade)."""
+        all_records = []
+        for batch in self._search_read_batches(model, domain, fields, batch_size, limit):
+            all_records.extend(batch)
+
+        logger.success(f"✅ Extração concluída: {len(all_records)} registros de {model}")
+        return all_records

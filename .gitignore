@@ -12,3 +12,7 @@ data/*.parquet
 # Manter models_list.csv versionado
 !data/models_list.csv
 
+# Terraform artifacts
+.terraform/
+*.tfstate
+*.tfstate.*
