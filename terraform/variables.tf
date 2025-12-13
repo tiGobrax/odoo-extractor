@@ -70,23 +70,6 @@ variable "odoo_password_secret_name" {
   default     = "odoo-password"
 }
 
-variable "gcs_bucket" {
-  description = "Bucket do GCS que receberá os arquivos Parquet"
-  type        = string
-}
-
-variable "gcs_base_path" {
-  description = "Prefixo base para salvar arquivos no GCS"
-  type        = string
-  default     = "data-lake/odoo"
-}
-
-variable "api_token" {
-  description = "Token usado pelos clientes para chamar a API"
-  type        = string
-  sensitive   = true
-}
-
 variable "enable_apis" {
   description = "APIs que precisam estar habilitadas no projeto"
   type        = list(string)

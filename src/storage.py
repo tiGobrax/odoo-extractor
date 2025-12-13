@@ -8,6 +8,8 @@ from google.cloud import storage
 from loguru import logger
 
 _storage_client: Optional[storage.Client] = None
+_GCS_BUCKET = "gobrax-data-lake"
+_GCS_BASE_PATH = "data-lake/odoo"
 
 
 def _get_storage_client() -> storage.Client:
@@ -20,7 +22,7 @@ def _get_storage_client() -> storage.Client:
 
 def _build_object_name(model: str, timestamp_str: str, chunk_suffix: Optional[str] = None) -> str:
     """Monta o caminho do objeto dentro do bucket."""
-    base_path = os.getenv("GCS_BASE_PATH", "data-lake/odoo").strip("/")
+    base_path = _GCS_BASE_PATH.strip("/")
     safe_model_name = model.replace(".", "_")
     file_name = timestamp_str
     if chunk_suffix:
@@ -45,10 +47,7 @@ def save_dataframe_to_gcs(
     Returns:
         str: URI gs:// do arquivo salvo.
     """
-    bucket_name = os.getenv("GCS_BUCKET")
-    if not bucket_name:
-        raise ValueError("Variável de ambiente GCS_BUCKET não configurada.")
-
+    bucket_name = _GCS_BUCKET
     now = datetime.now(timezone.utc)
     timestamp_str = object_timestamp or now.strftime("%Y%m%d_%H%M%S")
     ingestion_ts = now.isoformat()

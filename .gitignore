@@ -6,11 +6,8 @@ __pycache__/
 *.log
 .DS_Store
 
-# Dados extraídos (Parquet) - não versionar
-data/*.parquet
-
-# Manter models_list.csv versionado
-!data/models_list.csv
+# Dados gerados localmente
+data/
 
 # Terraform artifacts
 .terraform/

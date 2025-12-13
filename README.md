@@ -44,7 +44,7 @@ ODOO_URL=https://seu-dominio.odoo.com
 ODOO_DB=nome-do-banco
 ODOO_USERNAME=seu-usuario@email.com
 ODOO_PASSWORD=sua-api-key
-ODOO_MODEL=res.partner
+GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json
 ```
 
 ### Variáveis de Ambiente
@@ -55,10 +55,9 @@ ODOO_MODEL=res.partner
 | `ODOO_DB` | Nome do banco de dados | Sim | - |
 | `ODOO_USERNAME` | Usuário para autenticação | Sim | - |
 | `ODOO_PASSWORD` | API Key ou senha | Sim | - |
-| `ODOO_MODEL` | Modelo a ser extraído | Não | `res.partner` |
-| `GCS_BUCKET` | Bucket do Google Cloud Storage utilizado para salvar os Parquet | Sim | - |
-| `GCS_BASE_PATH` | Prefixo dentro do bucket (cada model vira uma subpasta) | Não | `data-lake/odoo` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Caminho para o JSON da service account com acesso ao bucket | Sim | - |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Caminho para o JSON da service account com acesso ao bucket (apenas fora do GCP) | Não | `/app/creds/odoo-etl.json` |
+| `MODE` | Define se o processo sobe API (`service`) ou roda o job (`job`) | Não | `service` |
+| `PORT` | Porta da API quando em modo serviço | Não | `8080` |
 
 ## ☁️ Armazenamento no Google Cloud Storage
 
@@ -67,6 +66,7 @@ Todos os datasets extraídos são enviados diretamente para o Google Cloud Stora
 - `gs://gobrax-data-lake/data-lake/odoo/stock_lot/<timestamp>.parquet`
 - `gs://gobrax-data-lake/data-lake/odoo/account_account/<timestamp>.parquet`
 - `gs://gobrax-data-lake/data-lake/odoo/crm_stage/<timestamp>.parquet`
+- `gs://gobrax-data-lake/data-lake/odoo/models_list.csv`
 
 O projeto **não remove arquivos do GCS**, apenas adiciona novos Parquet a cada execução.
 
@@ -104,42 +104,53 @@ cp env.example .env
 docker compose up --build
 ```
 
-A API estará disponível em `http://127.0.0.1:8000` (o container usa a variável `PORT`, padrão `8000`).
+A API estará disponível em `http://127.0.0.1:18080` (o container escuta em `PORT=8000`, mas o `docker-compose.yml` publica `18080:8000`; sem override, o padrão interno é `8080`).
 
-**Opção B: Script direto (job)**
+**Opção B: Execução batch (job)**
 
 ```bash
-docker compose run --rm odoo-extractor python -m src.main
+docker compose run --rm -e MODE=job odoo-extractor python -m app.main
 ```
+
+### Atualizar registry de models (CSV no GCS)
+
+1. **Garanta que a API esteja rodando localmente**:
+
+   ```bash
+   docker compose up --build
+   ```
+
+2. **Dispare a atualização do registry** (o endpoint `/models/update` gera o `models_list.csv` dentro da pasta `odoo` no GCS):
+
+   ```bash
+   curl -X POST "http://127.0.0.1:18080/models/update"
+   ```
 
 ### 4. Testar a API (se usando Opção A)
 
 Execute uma requisição para o endpoint de ETL:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/etl/run" \
-  -H "Authorization: Bearer meu_token"
+curl -X POST "http://127.0.0.1:18080/run/inc"
 ```
-
-**Nota:** Substitua `meu_token` pelo token de autenticação válido.
 
 ### 5. Documentação da API (se usando FastAPI)
 
 Acesse a documentação interativa em:
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
+- Swagger UI: `http://127.0.0.1:18080/docs`
+- ReDoc: `http://127.0.0.1:18080/redoc`
 
 ## 📖 Uso
 
 ### Uso Básico
 
-Execute o script principal (dentro do container):
+Para executar o pipeline completo sem subir a API, defina `MODE=job` e chame o mesmo entrypoint principal:
 
 ```bash
-docker-compose run --rm odoo-extractor python -m src.main
+docker compose run --rm -e MODE=job odoo-extractor python -m app.main
 ```
 
-Os Parquet serão enviados automaticamente para `gs://<GCS_BUCKET>/<GCS_BASE_PATH>/<model>/`.
+Os Parquet são gravados em `gs://gobrax-data-lake/data-lake/odoo/<model>/`.
 
 ## ☁️ Deploy no Cloud Run
 
@@ -176,7 +187,7 @@ O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliz
      --member="serviceAccount:odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com" \
      --role="roles/secretmanager.secretAccessor"
    ```
-   Configure os demais valores (URL, banco, usuário, bucket, token da API) via `--set-env-vars`. Para o `ODOO_PASSWORD`, prefira `--set-secrets`, evitando expor o valor.
+   Configure os demais valores (URL, banco, usuário) via `--set-env-vars`. Para o `ODOO_PASSWORD`, prefira `--set-secrets`, evitando expor o valor.
 
 4. **Deploy da API**
    ```bash
@@ -186,10 +197,7 @@ O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliz
      --service-account odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com \
      --set-env-vars ODOO_URL=https://gobrax.odoo.com, \
                     ODOO_DB=gobrax-sh-main-22440471, \
-                    ODOO_USERNAME=odoo@gobrax.com, \
-                    GCS_BUCKET=gobrax-data-lake, \
-                    GCS_BASE_PATH=data-lake/odoo, \
-                    API_TOKEN=meu_token \
+                    ODOO_USERNAME=odoo@gobrax.com \
      --set-secrets ODOO_PASSWORD=odoo-password:latest
    ```
    > Não defina `GOOGLE_APPLICATION_CREDENTIALS` se estiver usando a service account do Cloud Run; o client do GCS utiliza Workload Identity automaticamente.
@@ -200,7 +208,7 @@ O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliz
      `gcloud run logs read odoo-extractor --region ${REGION} --revision <revision>`
    - Quando o erro for “container failed to start”, quase sempre existe um stack trace nos logs de execução indicando variável ausente ou exceção do Python.
 
-Para execuções batch (equivalente a `python -m src.main`), crie um Cloud Run Job reutilizando a mesma imagem e comando `python -m src.main`, ou acione o endpoint `/etl/run` via DAG (Composer/Airflow) usando `Authorization: Bearer <API_TOKEN>`.
+Para execuções batch (engine completa sem API), crie um Cloud Run Job reutilizando a mesma imagem e defina `MODE=job` (o `start.sh` já chama `python -m app.main`). Também é possível orquestrar deltas chamando os endpoints `/run/inc` (incremental) ou `/run/full` (full refresh) via DAG sem necessidade de autenticação adicional.
 
 ## 🧱 Provisionamento com Terraform
 
@@ -258,27 +266,27 @@ df = pl.DataFrame(records)
 
 ```
 odoo-extractor/
+├── app/
+│   ├── api/                    # FastAPI + autenticação
+│   ├── engine/                 # Orquestração da extração
+│   ├── jobs/                   # Entrypoints batch (Cloud Run Job)
+│   └── main.py                 # Entrypoint único (MODE=service|job)
 ├── src/
-│   ├── main.py                 # Script principal
-│   └── odoo_extractor/
-│       ├── __init__.py
-│       └── odoo_client.py      # Cliente Odoo
-├── data/                       # Dados extraídos (Parquet)
-├── tests/                      # Testes unitários
+│   ├── utils.py                # Normalização de registros
+│   ├── storage.py              # Persistência em GCS (Polars)
+│   └── odoo_extractor/         # Cliente XML-RPC, conexão e erros
+├── start.sh                    # Script usado pelo container
 ├── requirements.txt            # Dependências Python
-├── Dockerfile                  # Imagem Docker
-├── docker-compose.yml          # Configuração Docker Compose
-├── .env.example               # Exemplo de variáveis de ambiente
-└── README.md                  # Este arquivo
+├── Dockerfile                  # Imagem Docker multi-stage
+├── docker-compose.yml          # Configuração para desenvolvimento local
+├── .env.example                # Exemplo de variáveis de ambiente
+├── terraform/                  # Provisionamento opcional na GCP
+└── README.md                   # Este arquivo
 ```
 
 ## 🧪 Testes
 
-Execute os testes:
-
-```bash
-pytest tests/
-```
+Ainda não há suíte automatizada publicada neste repositório. Recomendamos adicionar testes com `pytest` quando evoluir o projeto (por exemplo, cobrindo `OdooClient` com mocks de XML-RPC e o fluxo da engine).
 
 ## 🔍 Tratamento de Erros
 
@@ -336,7 +344,7 @@ Este projeto está sob a licença MIT.
 ## 🐛 Problemas Conhecidos
 
 - Alguns modelos podem ter campos que causam erros de schema (são automaticamente ignorados)
-- Timeouts podem ocorrer com modelos muito grandes (ajuste o `batch_size`)
+- Timeouts podem ocorrer com modelos muito grandes (ajuste a variável `ODOO_BATCH_SIZE` antes da execução)
 
 ## 📞 Suporte
 

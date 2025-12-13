@@ -1,323 +1,44 @@
-import csv
 import os
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Optional
-
-import polars as pl
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import sys
 from loguru import logger
 
-from src.odoo_extractor.odoo_client import ModelExtractionError, OdooClient
-from src.storage import save_dataframe_to_gcs
-from src.utils import sanitize_records
 
-load_dotenv()
-
-app = FastAPI(
-    title="Odoo Extractor API",
-    description="API para extração de dados do Odoo",
-    version="1.0.0"
-)
-
-security = HTTPBearer()
-
-# Token de autenticação (configure via variável de ambiente)
-API_TOKEN = os.getenv("API_TOKEN", "meu_token")
-
-# Arquivo para armazenar lista de models
-MODELS_FILE = Path("data/models_list.csv")
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verifica o token de autenticação"""
-    if credentials.credentials != API_TOKEN:
-        raise HTTPException(status_code=401, detail="Token inválido")
-    return credentials
-
-def load_models_list() -> List[str]:
-    """Carrega a lista de models do arquivo CSV"""
-    if MODELS_FILE.exists():
-        try:
-            models = []
-            with open(MODELS_FILE, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if row and row[0].strip():  # Ignora linhas vazias
-                        models.append(row[0].strip())
-            return models
-        except Exception as e:
-            logger.error(f"Erro ao carregar lista de models: {e}")
-            return []
-    return []
-
-def save_models_list(models: List[str]):
-    """Salva a lista de models no arquivo CSV"""
-    MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(MODELS_FILE, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.writer(f)
-        for model in sorted(models):  # Salva ordenado
-            writer.writerow([model])
-
-@app.get("/")
-async def root():
-    """Endpoint raiz"""
-    return {
-        "message": "Odoo Extractor API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
-
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"status": "healthy"}
-
-@app.post("/models/update")
-async def update_models_list(
-    token: HTTPAuthorizationCredentials = Depends(verify_token)
-):
+def main() -> None:
     """
-    Atualiza a lista de models disponíveis no Odoo
-    
-    Busca todos os models disponíveis no Odoo e salva em um arquivo local.
+    Entrypoint único da aplicação.
+
+    Decide o modo de execução com base na variável MODE:
+    - MODE=service → sobe API (FastAPI)
+    - MODE=job     → executa full extract (Cloud Run Job)
     """
-    try:
-        logger.info("🔄 Atualizando lista de models do Odoo...")
-        
-        client = OdooClient()
-        
-        # Busca todos os models disponíveis
-        # Usa ir.model para listar todos os models
-        try:
-            model_ids = client.models.execute_kw(
-                client.db,
-                client.uid,
-                client.password,
-                'ir.model',
-                'search',
-                [[]],
-                {}
-            )
-            
-            models_data = client.models.execute_kw(
-                client.db,
-                client.uid,
-                client.password,
-                'ir.model',
-                'read',
-                [model_ids],
-                {'fields': ['model']}
-            )
-            
-            models_list = [model['model'] for model in models_data if model.get('model')]
-            models_list = sorted(list(set(models_list)))  # Remove duplicatas e ordena
-            
-            # Salva a lista
-            save_models_list(models_list)
-            
-            logger.success(f"✅ Lista de models atualizada: {len(models_list)} models encontrados")
-            
-            return {
-                "status": "success",
-                "message": f"Lista de models atualizada com sucesso",
-                "models_count": len(models_list),
-                "models": models_list[:50]  # Retorna primeiros 50 para preview
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Erro ao buscar models: {e}")
-            raise HTTPException(status_code=500, detail=f"Erro ao buscar models: {str(e)}")
-            
-    except Exception as e:
-        logger.error(f"💥 Erro ao atualizar lista de models: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao atualizar lista: {str(e)}")
 
-@app.get("/models/list")
-async def get_models_list(
-    token: HTTPAuthorizationCredentials = Depends(verify_token)
-):
-    """Retorna a lista de models salva"""
-    models = load_models_list()
-    return {
-        "status": "success",
-        "models_count": len(models),
-        "models": models
-    }
+    mode = os.getenv("MODE", "service").lower()
 
-@app.post("/etl/run")
-async def run_etl(
-    prefix: Optional[str] = None,
-    fields: Optional[List[str]] = None,
-    limit: Optional[int] = None,
-    batch_size: Optional[int] = None,
-    token: HTTPAuthorizationCredentials = Depends(verify_token)
-):
-    """
-    Executa a extração de dados do Odoo
-    
-    Args:
-        prefix: Prefixo para filtrar models (ex: "res." para todos os models que começam com "res.")
-                Se None, processa todas as models da lista salva
-        fields: Lista de campos a extrair. Se não fornecido, usa campos padrão
-        limit: Limite de registros por model
-        token: Token de autenticação via Bearer
-    """
-    try:
-        logger.info("🚀 Iniciando extração do Odoo via API...")
-        
-        # Carrega lista de models
-        all_models = load_models_list()
-        
-        if not all_models:
-            raise HTTPException(
-                status_code=400, 
-                detail="Lista de models vazia. Execute /models/update primeiro."
-            )
-        
-        # Filtra models por prefix se fornecido
-        if prefix:
-            models_to_process = [m for m in all_models if m.startswith(prefix)]
-            logger.info(f"🔍 Filtrando models com prefix '{prefix}': {len(models_to_process)} models encontrados")
-        else:
-            models_to_process = all_models
-            logger.info(f"📋 Processando todas as models: {len(models_to_process)} models")
-        
-        if not models_to_process:
-            return {
-                "status": "success",
-                "message": f"Nenhum model encontrado com prefix '{prefix}'",
-                "processed_models": 0,
-                "results": []
-            }
+    logger.info(f"🔧 Inicializando aplicação em MODE={mode}")
 
-        # Define batch size efetivo
-        env_batch_size = int(os.getenv("ODOO_BATCH_SIZE", "2000"))
-        effective_batch_size = batch_size or env_batch_size
-        if effective_batch_size <= 0:
-            raise HTTPException(status_code=400, detail="batch_size deve ser maior que zero.")
-        
-        # Inicializa cliente Odoo
-        client = OdooClient()
-        
-        results = []
-        # Processa cada model
-        for model in models_to_process:
-            try:
-                logger.info(f"📊 Processando model: {model}")
-                
-                model_fields = fields if fields else client.get_all_fields(model)
-                chunk_paths: List[str] = []
-                chunk_index = 1
-                model_records = 0
-                timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if mode == "service":
+        logger.info("🌐 Iniciando API (FastAPI)")
+        import uvicorn
+        from app.api.app import app
 
-                # Extração de registros em lotes
-                for batch in client.iter_batches(
-                    model=model,
-                    domain=[],
-                    fields=model_fields,
-                    batch_size=effective_batch_size,
-                    limit=limit
-                ):
-                    if not batch:
-                        continue
+        port = int(os.getenv("PORT", "8080"))
 
-                    sanitized = sanitize_records(batch)
-                    if not sanitized:
-                        continue
-
-                    df = pl.DataFrame(sanitized, strict=False)
-
-                    # Gravação em Parquet (GCS) por lote
-                    gcs_uri = save_dataframe_to_gcs(
-                        df,
-                        model,
-                        object_timestamp=timestamp_str,
-                        chunk_index=chunk_index
-                    )
-
-                    chunk_paths.append(gcs_uri)
-                    model_records += len(batch)
-                    chunk_index += 1
-
-                if not chunk_paths:
-                    logger.warning(f"⚠️ Nenhum registro encontrado no model {model}")
-                    results.append({
-                        "model": model,
-                        "status": "empty",
-                        "records_count": 0,
-                        "file_path": None,
-                        "file_paths": []
-                    })
-                    continue
-
-                logger.success(
-                    f"✅ {model}: {model_records} registros extraídos em {len(chunk_paths)} arquivos"
-                )
-
-                results.append({
-                    "model": model,
-                    "status": "success",
-                    "records_count": model_records,
-                    "files_count": len(chunk_paths),
-                    "file_paths": chunk_paths,
-                    "file_path": chunk_paths[-1]
-                })
-                
-            except ModelExtractionError as e:
-                logger.warning(f"⚠️ Model {model} ignorado: {e.reason}")
-                results.append({
-                    "model": model,
-                    "status": "skipped",
-                    "error": e.reason,
-                    "records_count": 0,
-                    "file_path": None
-                })
-                continue
-            except Exception as e:
-                logger.error(f"❌ Erro ao processar model {model}: {e}")
-                results.append({
-                    "model": model,
-                    "status": "error",
-                    "error": str(e),
-                    "records_count": 0,
-                    "file_path": None
-                })
-                continue
-        
-        # Resumo
-        successful = sum(1 for r in results if r['status'] == 'success')
-        failed = sum(1 for r in results if r['status'] == 'error')
-        empty = sum(1 for r in results if r['status'] == 'empty')
-        skipped = sum(1 for r in results if r['status'] == 'skipped')
-        total_records = sum(r.get('records_count', 0) for r in results)
-        
-        logger.success(
-            f"✅ Extração concluída: {successful} sucesso, {empty} vazios, {skipped} ignorados, {failed} erros. "
-            f"Total de registros: {total_records}"
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
         )
-        
-        return {
-            "status": "success",
-            "message": "Extração concluída",
-            "prefix": prefix,
-            "total_models": len(models_to_process),
-            "successful": successful,
-            "empty": empty,
-            "skipped": skipped,
-            "failed": failed,
-            "total_records": total_records,
-            "results": results
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"💥 Erro ao executar ETL: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao executar extração: {str(e)}")
+
+    elif mode == "job":
+        logger.info("🏗️ Iniciando FULL EXTRACT job")
+        from app.jobs.full_extract_job import main as job_main
+
+        job_main()
+
+    else:
+        logger.error(f"❌ MODE inválido: {mode}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    main()

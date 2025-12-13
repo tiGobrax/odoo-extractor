@@ -28,18 +28,6 @@ locals {
       name  = "ODOO_USERNAME"
       value = var.odoo_username
     },
-    {
-      name  = "GCS_BUCKET"
-      value = var.gcs_bucket
-    },
-    {
-      name  = "GCS_BASE_PATH"
-      value = var.gcs_base_path
-    },
-    {
-      name  = "API_TOKEN"
-      value = var.api_token
-    }
   ]
 }
 
