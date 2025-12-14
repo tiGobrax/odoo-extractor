@@ -253,6 +253,22 @@ Principais parâmetros:
 
 O script baixa apenas o Parquet mais recente de cada model (pelo nome do arquivo) e exibe estatísticas no terminal.
 
+### Rodar análise dentro de um container
+
+Se quiser executar o analisador sem instalar dependências localmente, use o container oficial do Python montando o diretório do projeto e o JSON da service account:
+
+```bash
+docker run --rm -it \
+  --env-file .env \
+  -v "$(pwd)":/workspace \
+  -v "$(pwd)/odoo-etl@gobrax-data.iam.gserviceaccount.com.json":/app/creds/odoo-etl.json:ro \
+  -w /workspace \
+  python:3.11-slim \
+  bash -c "pip install --no-cache-dir -r requirements.txt && python parquet_analysis/analyze_parquets.py"
+```
+
+Esse comando instala as dependências necessárias dentro do container temporário (sem cache), reaproveita o `.env` local e garante que o script consiga acessar as credenciais do GCS em `/app/creds/odoo-etl.json`. Ajuste o caminho do JSON, parâmetros do script ou `requirements.txt` se estiver usando outro nome/arquivo.
+
 ## ☁️ Deploy no Cloud Run
 
 O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliza a porta definida pela variável `PORT` (Cloud Run define `PORT=8080`). Use o fluxo abaixo para garantir que a imagem publicada está alinhada com o que está no repositório:
