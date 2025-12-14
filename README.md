@@ -16,11 +16,47 @@ Extrator de dados do Odoo usando XML-RPC, com suporte a paginação automática,
 - ✅ Logging detalhado com Loguru
 - ✅ Suporte a Docker
 
+## 🧠 Arquitetura em Alto Nível
+
+- **API FastAPI (`MODE=service`)** expõe endpoints para health check, atualização/listagem do registry de models e execução incremental/full do ETL.
+- **Cloud Run Job / batch (`MODE=job`)** reutiliza a mesma engine para full extract sem servidor HTTP (`app/jobs/full_extract_job.py`).
+- **Engine (`app/engine`)** concentra regra de negócio: controle de cursores, sanitização de registros, escrita em Parquet + upload no GCS.
+- **Cliente Odoo (`src/odoo_extractor`)** encapsula autenticação, paginação e políticas de retry/classificação de erros da API XML-RPC.
+- **Persistência (`src/storage.py`, `app/engine/cursor_store.py`, `app/engine/models_registry.py`)** escreve datasets, cursores incrementais e `models_list.csv` dentro do mesmo bucket/prefixo no GCS.
+- **Ferramentas auxiliares**: script de análise de Parquet (`parquet_analysis/`), manifests Terraform (`terraform/`) e guia de deploy no EKS (`DEPLOY.md`).
+
 ## 📋 Pré-requisitos
 
 - Python 3.11+
 - Conta no Odoo com acesso à API
 - Variáveis de ambiente configuradas (veja `.env.example`)
+
+## 🧪 Setup e Execução Local (Python)
+
+1. **Clonar e criar ambiente virtual**
+   ```bash
+   git clone https://github.com/tiGobrax/odoo-extractor
+   cd odoo-extractor
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+2. **Configurar o arquivo `.env`**
+   ```bash
+   cp env.example .env
+   # edite ODOO_URL/DB/USERNAME/PASSWORD e GOOGLE_APPLICATION_CREDENTIALS
+   ```
+3. **Executar a API (modo service, FastAPI)**
+   ```bash
+   MODE=service PORT=8080 python -m app.main
+   # API disponível em http://127.0.0.1:8080
+   ```
+4. **Executar um batch completo (modo job)**
+   ```bash
+   MODE=job ODOO_BATCH_SIZE=5000 python -m app.main
+   ```
+   O job usa `app/jobs/full_extract_job.py`, resolve a lista de models no registry (GCS) e grava Parquets diretamente no bucket configurado.
 
 ## 🔧 Execução com Docker
 
@@ -59,6 +95,15 @@ GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json
 | `MODE` | Define se o processo sobe API (`service`) ou roda o job (`job`) | Não | `service` |
 | `PORT` | Porta da API quando em modo serviço | Não | `8080` |
 
+## 🧭 Modos de Execução
+
+| Modo | Variável | Entrypoint | Descrição |
+|------|----------|------------|-----------|
+| Service (API) | `MODE=service` | `uvicorn app.api.app:app` (via `start.sh` ou `python -m app.main`) | Expõe endpoints REST para disparar extrações, atualizar registry e health-check. |
+| Job (batch) | `MODE=job` | `python -m app.main` → `app/jobs/full_extract_job.py` | Executa full extract fora do contexto HTTP, ideal para Cloud Run Job, CronJob ou execução manual. |
+
+Ambos os modos reutilizam `run_extraction` (em `app/engine/extractor.py`). A diferença é somente o wrapper que aciona a engine.
+
 ## ☁️ Armazenamento no Google Cloud Storage
 
 Todos os datasets extraídos são enviados diretamente para o Google Cloud Storage. Cada model recebe sua própria pasta abaixo do prefixo configurado (`GCS_BASE_PATH`), por exemplo:
@@ -74,7 +119,12 @@ Todo arquivo inclui a coluna `ingestion_ts` em UTC (ISO 8601), permitindo filtra
 
 Campos complexos (listas/dicionários retornados por relacionamentos do Odoo) são serializados como JSON para evitar inconsistências de tipo entre registros.
 
+Além dos Parquet, o mesmo bucket/prefixo hospeda:
+- `models_list.csv`: resultado do `ModelsRegistry`, atualizado via endpoint `/models/update`.
+- `cursors/<model>.json`: cursores incrementais (write_date/id) persistidos pela `CursorStore`.
+
 Para rodar em Docker, monte o JSON da service account no container e aponte `GOOGLE_APPLICATION_CREDENTIALS` para o caminho interno. O `docker-compose.yml` de exemplo já expõe o segredo via volume somente leitura (`./odoo-etl@gobrax-data.iam.gserviceaccount.com.json:/app/creds/odoo-etl.json:ro`).
+> ℹ️ Os valores padrão de bucket/prefixo (`gobrax-data-lake` / `data-lake/odoo`) estão definidos nos módulos `src/storage.py`, `app/engine/cursor_store.py` e `app/engine/models_registry.py`. Ajuste-os se precisar apontar para outro data lake.
 
 ## 🏃 Rodar com Docker (Passo a Passo)
 
@@ -140,6 +190,34 @@ Acesse a documentação interativa em:
 - Swagger UI: `http://127.0.0.1:18080/docs`
 - ReDoc: `http://127.0.0.1:18080/redoc`
 
+## 📡 Endpoints da API
+
+| Método | Caminho | Descrição |
+|--------|---------|-----------|
+| `GET` | `/health` | Health check simples. |
+| `POST` | `/models/update` | Consulta `ir.model`, salva `models_list.csv` no GCS. |
+| `GET` | `/models/list` | Retorna a lista atual armazenada no GCS. |
+| `POST` | `/run/inc` | Executa extração incremental (default, usa cursor write_date/id). |
+| `POST` | `/run/full` | Executa full refresh ignorando cursores. |
+| `POST` | `/etl/run` | Endpoint legado, mantém comportamento incremental. |
+
+Parâmetros opcionais aceitos nos endpoints de ETL:
+- `prefix`: apenas models cujo nome inicia com esse prefixo.
+- `fields`: lista customizada de campos (default = todos).
+- `limit`: limite de registros por model (apenas para troubleshooting).
+
+## 🧾 Registry de Models e Incremental
+
+1. **Atualize o registry** (`/models/update`) sempre que novos models forem habilitados no Odoo. O arquivo `models_list.csv` fica no mesmo bucket/prefixo configurado na engine.
+2. **Liste para verificar** (`/models/list`), especialmente antes de rodar jobs via linha de comando.
+3. **Execute o ETL**:
+   - Incremental (`/run/inc` ou `MODE=service`/`MODE=job` sem limpar cursores) usa `write_date` + `id` como cursor. Models sem `write_date` caem para full refresh automaticamente.
+   - Full refresh (`/run/full` ou `MODE=job`) ignora cursores e não atualiza `last_value`.
+4. **Cursores** são salvos em `cursors/<model>.json` contendo `cursor_field`, `last_value`, `last_id` e `updated_at`. Caso precise reiniciar de um ponto, remova o arquivo correspondente no bucket.
+5. **Falhas controladas**:
+   - Erros permanentes de schema/permissão são classificados como `skipped`.
+   - Erros temporários disparam retry com backoff e reconexão automática da sessão XML-RPC.
+
 ## 📖 Uso
 
 ### Uso Básico
@@ -151,6 +229,29 @@ docker compose run --rm -e MODE=job odoo-extractor python -m app.main
 ```
 
 Os Parquet são gravados em `gs://gobrax-data-lake/data-lake/odoo/<model>/`.
+
+## 🔍 Análise de Parquets (Ferramenta Auxiliar)
+
+O script `parquet_analysis/analyze_parquets.py` ajuda a inspecionar arquivos no bucket, identificando campos que podem servir como cursor (`write_date`, `__last_update`, etc.), checando min/max/null e exibindo colunas com palavras-chave.
+
+Uso típico:
+```bash
+python parquet_analysis/analyze_parquets.py \
+  --bucket gobrax-data-lake \
+  --base-path data-lake/odoo \
+  --fields id name write_date \
+  --search-terms write date last update \
+  --limit 5
+```
+
+Principais parâmetros:
+- `--bucket` / `--base-path`: mesmo bucket/prefixo usado na engine.
+- `--models`: restringe os models analisados; se omisso, lista automaticamente via prefixos do GCS.
+- `--fields`: campos fixos que sempre aparecerão no relatório.
+- `--search-terms`: termos (case-insensitive) para procurar colunas adicionais.
+- `--ignore-fields`: remove campos específicos mesmo que coincidam com termos.
+
+O script baixa apenas o Parquet mais recente de cada model (pelo nome do arquivo) e exibe estatísticas no terminal.
 
 ## ☁️ Deploy no Cloud Run
 
@@ -213,6 +314,7 @@ Para execuções batch (engine completa sem API), crie um Cloud Run Job reutiliz
 ## 🧱 Provisionamento com Terraform
 
 Se preferir automatizar toda a infraestrutura GCP (Artifact Registry, Secret Manager, service account e Cloud Run), utilize os manifests em `terraform/`.
+> Para um guia completo de deploy no Amazon EKS (Jobs, CronJobs, IRSA, etc.), consulte `DEPLOY.md`.
 
 1. Configure a autenticação local (`gcloud auth application-default login` ou `GOOGLE_APPLICATION_CREDENTIALS`).
 2. Copie o arquivo de variáveis e edite com seus valores:
