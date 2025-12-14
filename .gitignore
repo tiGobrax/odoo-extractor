@@ -1,6 +1,9 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+
+# Environment
 .env
 *.json
 *.log
@@ -9,7 +12,8 @@ __pycache__/
 # Dados gerados localmente
 data/
 
-# Terraform artifacts
+# Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfvars
