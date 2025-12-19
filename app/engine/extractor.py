@@ -7,7 +7,7 @@ from loguru import logger
 from app.engine.cursor_store import CursorStore
 from src.odoo_extractor.odoo_client import OdooClient, ModelExtractionError
 from src.storage import save_dataframe_to_gcs
-from src.utils import sanitize_records
+from src.utils import sanitize_records, build_polars_schema, enforce_polars_schema
 
 
 class ExtractionResult:
@@ -156,7 +156,17 @@ def run_extraction(
         try:
             logger.info(f"📊 Processando model: {model}")
 
-            all_fields = client.get_all_fields(model)
+            fields_metadata = client.get_fields_metadata(model)
+            all_fields = list(fields_metadata.keys())
+
+            for field_name, field_type in {
+                "id": "integer",
+                "__last_update": "datetime",
+                "write_date": "datetime",
+                "create_date": "datetime",
+            }.items():
+                fields_metadata.setdefault(field_name, {"type": field_type})
+
             if fields:
                 model_fields = list(fields)
             else:
@@ -172,7 +182,7 @@ def run_extraction(
                     cursor_field = "write_date"
                     cursor_data = cursor_store.load(model)
 
-                    if cursor_field not in model_fields:
+                    if cursor_field and cursor_field not in model_fields:
                         model_fields.append(cursor_field)
                     if "id" not in model_fields:
                         model_fields.append("id")
@@ -206,6 +216,16 @@ def run_extraction(
                     model_fields.append("id")
                 logger.info("📥 Full refresh em %s", model)
 
+            seen_fields = set()
+            deduped_fields: List[str] = []
+            for field_name in model_fields:
+                if field_name not in seen_fields:
+                    deduped_fields.append(field_name)
+                    seen_fields.add(field_name)
+            model_fields = deduped_fields
+
+            model_schema = build_polars_schema(fields_metadata, model_fields)
+
             chunk_paths: List[str] = []
             model_records = 0
             chunk_index = 1
@@ -222,11 +242,12 @@ def run_extraction(
                 if not batch:
                     continue
 
-                sanitized = sanitize_records(batch)
+                sanitized = sanitize_records(batch, fields_metadata)
                 if not sanitized:
                     continue
 
                 df = pl.DataFrame(sanitized, strict=False)
+                df = enforce_polars_schema(df, model_schema)
 
                 if cursor_field:
                     candidate = _extract_batch_cursor(

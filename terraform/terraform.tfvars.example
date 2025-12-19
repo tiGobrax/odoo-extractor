@@ -6,11 +6,18 @@ container_image        = "us-central1-docker.pkg.dev/gobrax-data/odoo-extractor/
 cloud_run_service_name = "odoo-extractor"
 service_account_name   = "odoo-extractor-api"
 artifact_registry_repo = "odoo-extractor"
+cloud_run_job_name     = "odoo-extractor-full"
 
 odoo_url      = "https://gobrax.odoo.com"
 odoo_db       = "gobrax-sh-main-22440471"
 odoo_username = "odoo@gobrax.com"
 odoo_password = "COLAR_API_KEY_AQUI"
+
+# Job / Scheduler (opcional)
+enable_full_extract_scheduler = true
+cloud_scheduler_job_name      = "odoo-extractor-full"
+cloud_scheduler_cron          = "0 3 * * *"
+cloud_scheduler_time_zone     = "America/Sao_Paulo"
 
 # Opcionalmente ajuste caminhos/infra
 #odoo_password_secret_name  = "odoo-password"

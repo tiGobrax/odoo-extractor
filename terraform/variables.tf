@@ -32,6 +32,12 @@ variable "cloud_run_service_name" {
   default     = "odoo-extractor"
 }
 
+variable "cloud_run_job_name" {
+  description = "Nome do Cloud Run Job responsável pelo full extract"
+  type        = string
+  default     = "odoo-extractor-full"
+}
+
 variable "container_image" {
   description = "Imagem container publicada no Artifact Registry"
   type        = string
@@ -76,7 +82,8 @@ variable "enable_apis" {
   default = [
     "artifactregistry.googleapis.com",
     "run.googleapis.com",
-    "secretmanager.googleapis.com"
+    "secretmanager.googleapis.com",
+    "cloudscheduler.googleapis.com"
   ]
 }
 
@@ -90,6 +97,24 @@ variable "max_instance_count" {
   description = "Número máximo de instâncias Cloud Run"
   type        = number
   default     = 5
+}
+
+variable "cloud_run_job_task_count" {
+  description = "Quantidade de tasks executadas pelo Cloud Run Job"
+  type        = number
+  default     = 1
+}
+
+variable "cloud_run_job_parallelism" {
+  description = "Paralelismo máximo por execução do Cloud Run Job"
+  type        = number
+  default     = 1
+}
+
+variable "cloud_run_job_timeout_seconds" {
+  description = "Timeout máximo por task do Cloud Run Job"
+  type        = number
+  default     = 14400
 }
 
 variable "request_timeout_seconds" {
@@ -108,4 +133,34 @@ variable "invoker_identity" {
   description = "Principal que poderá invocar o serviço (quando não público)"
   type        = string
   default     = null
+}
+
+variable "enable_full_extract_scheduler" {
+  description = "Cria um Cloud Scheduler para executar o job de full extract diariamente"
+  type        = bool
+  default     = false
+}
+
+variable "scheduler_service_account_name" {
+  description = "Service account usada pelo Cloud Scheduler para invocar o Cloud Run Job"
+  type        = string
+  default     = "odoo-extractor-scheduler"
+}
+
+variable "cloud_scheduler_job_name" {
+  description = "Nome do job no Cloud Scheduler"
+  type        = string
+  default     = "odoo-extractor-full"
+}
+
+variable "cloud_scheduler_cron" {
+  description = "Agendamento cron (formato Cloud Scheduler)"
+  type        = string
+  default     = "0 5 * * *"
+}
+
+variable "cloud_scheduler_time_zone" {
+  description = "Time zone usado pelo Cloud Scheduler"
+  type        = string
+  default     = "Etc/UTC"
 }

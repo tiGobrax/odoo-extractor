@@ -34,22 +34,26 @@ class OdooClient:
         self.password = self.conn.password
         self.models = self.conn.models
 
-    def get_all_fields(self, model: str) -> list[str]:
-        """Retorna todos os campos disponíveis para um model."""
+    def get_fields_metadata(self, model: str) -> dict[str, dict]:
+        """Retorna metadados (tipo, label etc.) de todos os campos do model."""
         try:
-            metadata = self.models.execute_kw(
+            return self.models.execute_kw(
                 self.db,
                 self.uid,
                 self.password,
                 model,
                 "fields_get",
                 [],
-                {"attributes": ["string"]},
+                {"attributes": ["string", "type", "relation"]},
             )
-            return list(metadata.keys())
         except Exception as e:
             logger.error(f"❌ Erro ao listar campos de {model}: {e}")
             raise
+
+    def get_all_fields(self, model: str) -> list[str]:
+        """Retorna apenas o nome dos campos disponíveis para um model."""
+        metadata = self.get_fields_metadata(model)
+        return list(metadata.keys())
 
     def _search_read_batches(
         self,
