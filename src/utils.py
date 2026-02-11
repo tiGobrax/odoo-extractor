@@ -141,23 +141,7 @@ def _coerce_value(field_type: Optional[str], value: Any) -> Any:
         return _coerce_many2one(value)
     if field_type in _RELATION_LIST_TYPES:
         return _coerce_relation_list(value)
-    if field_type in _STRING_FIELD_TYPES:
-        return _ensure_string(value)
-    if field_type in _INTEGER_FIELD_TYPES:
-        return _coerce_int(value)
-    if field_type in _FLOAT_FIELD_TYPES:
-        return _coerce_float(value)
-    if field_type in _DATETIME_FIELD_TYPES:
-        return _parse_datetime_value(value)
-    if field_type in _DATE_FIELD_TYPES:
-        return _parse_date_value(value)
-    if field_type == "boolean":
-        return bool(value) if not _is_null(value) else False
-    if isinstance(value, (list, dict)):
-        return _stringify_complex(value)
-    if value is False:
-        return None
-    return value
+    return _ensure_string(value)
 
 
 def sanitize_records(
@@ -176,17 +160,8 @@ def sanitize_records(
 
 
 def _map_field_type_to_polars(field_type: Optional[str]) -> Optional[pl.DataType]:
-    if field_type in _STRING_FIELD_TYPES or field_type in _RELATION_ID_TYPES | _RELATION_LIST_TYPES:
-        return pl.Utf8
-    if field_type in _INTEGER_FIELD_TYPES:
-        return pl.Int64
-    if field_type in _FLOAT_FIELD_TYPES:
-        return pl.Float64
-    if field_type == "boolean":
-        return pl.Boolean
-    if field_type in _DATETIME_FIELD_TYPES or field_type in _DATE_FIELD_TYPES:
-        return pl.Datetime(time_unit="us")
-    return None
+    # Forca persistencia uniforme em string para todos os campos no parquet.
+    return pl.Utf8
 
 
 def build_polars_schema(
