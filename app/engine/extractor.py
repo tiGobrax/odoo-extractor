@@ -7,7 +7,13 @@ from loguru import logger
 from app.engine.cursor_store import CursorStore
 from src.odoo_extractor.odoo_client import OdooClient, ModelExtractionError
 from src.storage import save_dataframe_to_gcs
-from src.utils import sanitize_records, build_polars_schema, enforce_polars_schema
+from src.utils import (
+    sanitize_records,
+    build_polars_schema,
+    enforce_polars_schema,
+    detect_mixed_type_columns,
+    ensure_string_columns,
+)
 
 
 class ExtractionResult:
@@ -242,12 +248,30 @@ def run_extraction(
                 if not batch:
                     continue
 
+                mixed_columns = detect_mixed_type_columns(batch)
+                for column, info in mixed_columns.items():
+                    types = ", ".join(info["types"])
+                    logger.warning(
+                        'Column "{}" had mixed types ({}) with {} incoherent values; forced to Utf8.',
+                        column,
+                        types,
+                        info["incoherent_count"],
+                    )
+
                 sanitized = sanitize_records(batch, fields_metadata)
                 if not sanitized:
                     continue
 
-                df = pl.DataFrame(sanitized, strict=False)
+                df = pl.DataFrame(sanitized, schema=model_schema, strict=False)
                 df = enforce_polars_schema(df, model_schema)
+                df = ensure_string_columns(
+                    df,
+                    on_cast_warning=lambda column, dtype: logger.warning(
+                        'Column "{}" detected as {}; casted to string.',
+                        column,
+                        dtype,
+                    ),
+                )
 
                 if cursor_field:
                     candidate = _extract_batch_cursor(

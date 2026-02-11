@@ -1,7 +1,8 @@
 import json
+from collections import Counter, defaultdict
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import polars as pl
 
@@ -142,6 +143,90 @@ def _coerce_value(field_type: Optional[str], value: Any) -> Any:
     if field_type in _RELATION_LIST_TYPES:
         return _coerce_relation_list(value)
     return _ensure_string(value)
+
+
+def _python_type_name(value: Any) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, Decimal):
+        return "decimal"
+    if isinstance(value, datetime):
+        return "datetime"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, dict):
+        return "dict"
+    if isinstance(value, (list, tuple, set)):
+        return "list"
+    return type(value).__name__
+
+
+def detect_mixed_type_columns(
+    records: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Detecta colunas que contêm múltiplos tipos Python no mesmo batch.
+
+    Retorna um dict no formato:
+    {
+        "coluna": {
+            "types": ["int", "str"],
+            "incoherent_count": 3,
+        }
+    }
+    """
+    type_counters: Dict[str, Counter] = defaultdict(Counter)
+    for record in records:
+        for key, value in record.items():
+            if _is_null(value):
+                continue
+            type_counters[key][_python_type_name(value)] += 1
+
+    mixed_columns: Dict[str, Dict[str, Any]] = {}
+    for column, counter in type_counters.items():
+        if len(counter) <= 1:
+            continue
+        total_values = sum(counter.values())
+        dominant_count = max(counter.values())
+        mixed_columns[column] = {
+            "types": sorted(counter.keys()),
+            "incoherent_count": total_values - dominant_count,
+        }
+    return mixed_columns
+
+
+def ensure_string_columns(
+    df: pl.DataFrame,
+    *,
+    on_cast_warning: Optional[Callable[[str, pl.DataType], None]] = None,
+) -> pl.DataFrame:
+    """
+    Garante que todas as colunas sejam Utf8.
+
+    Quando uma coluna precisar de cast, chama `on_cast_warning(col, original_dtype)`.
+    """
+    for column in df.columns:
+        original_dtype = df.schema[column]
+        if original_dtype in {pl.Utf8, pl.Categorical}:
+            continue
+        if on_cast_warning:
+            on_cast_warning(column, original_dtype)
+        try:
+            df = df.with_columns(pl.col(column).cast(pl.Utf8, strict=False).alias(column))
+        except Exception:
+            df = df.with_columns(
+                pl.col(column)
+                .map_elements(
+                    lambda value: None if value is None else str(value),
+                    return_dtype=pl.Utf8,
+                )
+                .alias(column)
+            )
+    return df
 
 
 def sanitize_records(
