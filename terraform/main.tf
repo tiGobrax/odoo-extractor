@@ -203,6 +203,12 @@ resource "google_cloud_run_v2_job" "odoo_full" {
         image   = var.container_image
         command = ["python", "-m", "app.main"]
 
+        resources {
+          limits = {
+            memory = var.cloud_run_job_memory
+          }
+        }
+
         dynamic "env" {
           for_each = local.full_job_container_env
           content {
@@ -245,6 +251,12 @@ resource "google_cloud_run_v2_job" "odoo_inc" {
       containers {
         image   = var.container_image
         command = ["python", "-m", "app.main"]
+
+        resources {
+          limits = {
+            memory = var.cloud_run_job_memory
+          }
+        }
 
         dynamic "env" {
           for_each = local.inc_job_container_env

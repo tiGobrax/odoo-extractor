@@ -12,6 +12,8 @@ env:
   REPOSITORY: odoo-extractor
   FULL_JOB: odoo-extractor-full
   INC_JOB: odoo-extractor-inc
+  FULL_JOB_MEMORY: 4Gi
+  INC_JOB_MEMORY: 4Gi
   ODOO_URL: https://gobrax.odoo.com
   ODOO_DB: gobrax-sh-main-22440471
   ODOO_USERNAME: odoo@gobrax.com
@@ -71,6 +73,7 @@ jobs:
               --args="-m,app.main" \
               --set-env-vars MODE=job,JOB_TYPE=full,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+              --memory=$FULL_JOB_MEMORY \
               --tasks=1 \
               --max-retries=0 \
               --task-timeout=43200s
@@ -85,6 +88,7 @@ jobs:
             --args="-m,app.main" \
             --set-env-vars MODE=job,JOB_TYPE=full,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+            --memory=$FULL_JOB_MEMORY \
             --tasks=1 \
             --max-retries=0 \
             --task-timeout=43200s
@@ -102,6 +106,7 @@ jobs:
               --args="-m,app.main" \
               --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+              --memory=$INC_JOB_MEMORY \
               --tasks=1 \
               --max-retries=0 \
               --task-timeout=43200s
@@ -116,6 +121,7 @@ jobs:
             --args="-m,app.main" \
             --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+            --memory=$INC_JOB_MEMORY \
             --tasks=1 \
             --max-retries=0 \
             --task-timeout=43200s

@@ -123,6 +123,12 @@ variable "cloud_run_job_timeout_seconds" {
   default     = 43200
 }
 
+variable "cloud_run_job_memory" {
+  description = "Memória por task do Cloud Run Job"
+  type        = string
+  default     = "4Gi"
+}
+
 variable "request_timeout_seconds" {
   description = "Timeout (em segundos) por requisição"
   type        = number
