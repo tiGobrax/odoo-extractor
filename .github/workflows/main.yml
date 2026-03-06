@@ -10,6 +10,13 @@ env:
   REGION: us-central1
   SERVICE: odoo-extractor
   REPOSITORY: odoo-extractor
+  FULL_JOB: odoo-extractor-full
+  INC_JOB: odoo-extractor-inc
+  ODOO_URL: https://gobrax.odoo.com
+  ODOO_DB: gobrax-sh-main-22440471
+  ODOO_USERNAME: odoo@gobrax.com
+  ODOO_SECRET: odoo-password
+  RUNTIME_SA: odoo-extractor-api@gobrax-data.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -39,12 +46,76 @@ jobs:
           docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${{ github.sha }} .
           docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${{ github.sha }}
 
-      - name: Deploy to Cloud Run
+      - name: Deploy Cloud Run Service
         run: |
           gcloud run deploy $SERVICE \
             --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE:${{ github.sha }} \
             --region $REGION \
             --platform managed \
             --allow-unauthenticated \
+            --service-account $RUNTIME_SA \
+            --set-env-vars MODE=service,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+            --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
             --verbosity=info
 
+      - name: Upsert Full Job
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE:${{ github.sha }}"
+          if ! gcloud run jobs describe "$FULL_JOB" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud run jobs create "$FULL_JOB" \
+              --image "$IMAGE" \
+              --region "$REGION" \
+              --project "$PROJECT_ID" \
+              --service-account "$RUNTIME_SA" \
+              --command=python \
+              --args="-m,app.main" \
+              --set-env-vars MODE=job,JOB_TYPE=full,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+              --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+              --tasks=1 \
+              --max-retries=0 \
+              --task-timeout=3600s
+          fi
+
+          gcloud run jobs update "$FULL_JOB" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --service-account "$RUNTIME_SA" \
+            --command=python \
+            --args="-m,app.main" \
+            --set-env-vars MODE=job,JOB_TYPE=full,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+            --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+            --tasks=1 \
+            --max-retries=0 \
+            --task-timeout=3600s
+
+      - name: Upsert Incremental Job
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$SERVICE:${{ github.sha }}"
+          if ! gcloud run jobs describe "$INC_JOB" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud run jobs create "$INC_JOB" \
+              --image "$IMAGE" \
+              --region "$REGION" \
+              --project "$PROJECT_ID" \
+              --service-account "$RUNTIME_SA" \
+              --command=python \
+              --args="-m,app.main" \
+              --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+              --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+              --tasks=1 \
+              --max-retries=0 \
+              --task-timeout=3600s
+          fi
+
+          gcloud run jobs update "$INC_JOB" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --service-account "$RUNTIME_SA" \
+            --command=python \
+            --args="-m,app.main" \
+            --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+            --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
+            --tasks=1 \
+            --max-retries=0 \
+            --task-timeout=3600s

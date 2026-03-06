@@ -44,12 +44,30 @@ locals {
     ],
   )
 
-  job_container_env = concat(
+  full_job_container_env = concat(
     local.base_container_env,
     [
       {
         name  = "MODE"
         value = "job"
+      },
+      {
+        name  = "JOB_TYPE"
+        value = "full"
+      }
+    ],
+  )
+
+  inc_job_container_env = concat(
+    local.base_container_env,
+    [
+      {
+        name  = "MODE"
+        value = "job"
+      },
+      {
+        name  = "JOB_TYPE"
+        value = "inc"
       }
     ],
   )
@@ -186,7 +204,50 @@ resource "google_cloud_run_v2_job" "odoo_full" {
         command = ["python", "-m", "app.main"]
 
         dynamic "env" {
-          for_each = local.job_container_env
+          for_each = local.full_job_container_env
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+
+        env {
+          name = "ODOO_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.odoo_password.secret_id
+              version = google_secret_manager_secret_version.odoo_password.version
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_version.odoo_password
+  ]
+}
+
+resource "google_cloud_run_v2_job" "odoo_inc" {
+  name     = var.cloud_run_inc_job_name
+  location = var.region
+
+  template {
+    parallelism = var.cloud_run_job_parallelism
+    task_count  = var.cloud_run_job_task_count
+
+    template {
+      service_account = google_service_account.odoo.email
+      timeout         = "${var.cloud_run_job_timeout_seconds}s"
+
+      containers {
+        image   = var.container_image
+        command = ["python", "-m", "app.main"]
+
+        dynamic "env" {
+          for_each = local.inc_job_container_env
           content {
             name  = env.value.name
             value = env.value.value

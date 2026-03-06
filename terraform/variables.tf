@@ -38,6 +38,12 @@ variable "cloud_run_job_name" {
   default     = "odoo-extractor-full"
 }
 
+variable "cloud_run_inc_job_name" {
+  description = "Nome do Cloud Run Job responsável pelo incremental extract"
+  type        = string
+  default     = "odoo-extractor-inc"
+}
+
 variable "container_image" {
   description = "Imagem container publicada no Artifact Registry"
   type        = string

@@ -470,3 +470,14 @@ Este projeto está sob a licença MIT.
 
 Para problemas ou dúvidas, abra uma issue no repositório.
 
+
+## Orquestracao via Airflow (sem cron no GCP)
+
+Quando a orquestracao e exclusiva no Airflow:
+
+- Use Cloud Run Job `odoo-extractor-full` para full refresh (`MODE=job`, `JOB_TYPE=full`).
+- Use Cloud Run Job `odoo-extractor-inc` para incremental (`MODE=job`, `JOB_TYPE=inc`).
+- Nao habilite Cloud Scheduler no GCP (`enable_full_extract_scheduler=false`).
+
+O workflow de deploy (`.github/workflows/main.yml`) deve atualizar service e os dois jobs,
+mas os disparos ficam sob controle das DAGs no Airflow.
