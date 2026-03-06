@@ -38,7 +38,7 @@ def main() -> None:
     logger.info("🚀 Iniciando FULL EXTRACT (Cloud Run Job)")
 
     # Configurações de execução batch
-    batch_size = int(os.getenv("ODOO_BATCH_SIZE", "5000"))
+    batch_size = int(os.getenv("ODOO_BATCH_SIZE", "2000"))
     prefix = os.getenv("ODOO_MODELS_PREFIX")
     limit = None  # full load nunca usa limit
     fields = None  # extrai todos os campos

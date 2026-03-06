@@ -32,7 +32,7 @@ def main() -> None:
 
     logger.info("Iniciando INCREMENTAL EXTRACT (Cloud Run Job)")
 
-    batch_size = int(os.getenv("ODOO_BATCH_SIZE", "5000"))
+    batch_size = int(os.getenv("ODOO_BATCH_SIZE", "2000"))
     prefix = os.getenv("ODOO_MODELS_PREFIX")
     limit_env = os.getenv("ODOO_LIMIT")
     limit = int(limit_env) if limit_env else None

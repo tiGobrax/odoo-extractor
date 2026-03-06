@@ -69,7 +69,7 @@ jobs:
               --service-account "$RUNTIME_SA" \
               --command=python \
               --args="-m,app.main" \
-              --set-env-vars MODE=job,JOB_TYPE=full,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+              --set-env-vars MODE=job,JOB_TYPE=full,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
               --tasks=1 \
               --max-retries=0 \
@@ -83,7 +83,7 @@ jobs:
             --service-account "$RUNTIME_SA" \
             --command=python \
             --args="-m,app.main" \
-            --set-env-vars MODE=job,JOB_TYPE=full,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+            --set-env-vars MODE=job,JOB_TYPE=full,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
             --tasks=1 \
             --max-retries=0 \
@@ -100,7 +100,7 @@ jobs:
               --service-account "$RUNTIME_SA" \
               --command=python \
               --args="-m,app.main" \
-              --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+              --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
               --tasks=1 \
               --max-retries=0 \
@@ -114,7 +114,7 @@ jobs:
             --service-account "$RUNTIME_SA" \
             --command=python \
             --args="-m,app.main" \
-            --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
+            --set-env-vars MODE=job,JOB_TYPE=inc,ODOO_BATCH_SIZE=2000,ODOO_URL=$ODOO_URL,ODOO_DB=$ODOO_DB,ODOO_USERNAME=$ODOO_USERNAME \
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
             --tasks=1 \
             --max-retries=0 \
