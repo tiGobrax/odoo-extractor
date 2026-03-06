@@ -120,7 +120,7 @@ variable "cloud_run_job_parallelism" {
 variable "cloud_run_job_timeout_seconds" {
   description = "Timeout máximo por task do Cloud Run Job"
   type        = number
-  default     = 14400
+  default     = 43200
 }
 
 variable "request_timeout_seconds" {

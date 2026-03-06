@@ -73,7 +73,7 @@ jobs:
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
               --tasks=1 \
               --max-retries=0 \
-              --task-timeout=3600s
+              --task-timeout=43200s
           fi
 
           gcloud run jobs update "$FULL_JOB" \
@@ -87,7 +87,7 @@ jobs:
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
             --tasks=1 \
             --max-retries=0 \
-            --task-timeout=3600s
+            --task-timeout=43200s
 
       - name: Upsert Incremental Job
         run: |
@@ -104,7 +104,7 @@ jobs:
               --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
               --tasks=1 \
               --max-retries=0 \
-              --task-timeout=3600s
+              --task-timeout=43200s
           fi
 
           gcloud run jobs update "$INC_JOB" \
@@ -118,4 +118,4 @@ jobs:
             --set-secrets ODOO_PASSWORD=$ODOO_SECRET:latest \
             --tasks=1 \
             --max-retries=0 \
-            --task-timeout=3600s
+            --task-timeout=43200s
