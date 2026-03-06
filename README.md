@@ -94,6 +94,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json
 | `GOOGLE_APPLICATION_CREDENTIALS` | Caminho para o JSON da service account com acesso ao bucket (apenas fora do GCP) | Não | `/app/creds/odoo-etl.json` |
 | `MODE` | Define se o processo sobe API (`service`) ou roda o job (`job`) | Não | `service` |
 | `PORT` | Porta da API quando em modo serviço | Não | `8080` |
+| `ODOO_MODELS_PREFIX` | Filtra os models do registry por prefixo quando `MODE=job` | Não | vazio |
 
 ## 🧭 Modos de Execução
 
@@ -213,6 +214,7 @@ Parâmetros opcionais aceitos nos endpoints de ETL:
 3. **Execute o ETL**:
    - Incremental (`/run/inc` ou `MODE=service`/`MODE=job` sem limpar cursores) usa `write_date` + `id` como cursor. Models sem `write_date` caem para full refresh automaticamente.
    - Full refresh (`/run/full` ou `MODE=job`) ignora cursores e não atualiza `last_value`.
+   - Para restringir o Cloud Run Job a uma família de models, defina `ODOO_MODELS_PREFIX` (ex.: `stock`).
 4. **Cursores** são salvos em `cursors/<model>.json` contendo `cursor_field`, `last_value`, `last_id` e `updated_at`. Caso precise reiniciar de um ponto, remova o arquivo correspondente no bucket.
 5. **Falhas controladas**:
    - Erros permanentes de schema/permissão são classificados como `skipped`.

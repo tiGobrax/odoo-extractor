@@ -5,6 +5,26 @@ from app.engine.extractor import run_extraction
 from app.engine.models_registry import ModelsRegistry
 
 
+def _select_models(prefix: str | None) -> list[str]:
+    registry = ModelsRegistry()
+    all_models = registry.load()
+
+    if not all_models:
+        logger.error("❌ Nenhum model encontrado no registry. Job abortado.")
+        raise SystemExit(1)
+
+    if prefix:
+        models = [model for model in all_models if model.startswith(prefix)]
+        logger.info(f"🔍 Prefix '{prefix}': {len(models)} models")
+        if not models:
+            logger.error(f"❌ Nenhum model encontrado para o prefix '{prefix}'.")
+            raise SystemExit(1)
+        return models
+
+    logger.info(f"📋 {len(all_models)} models carregados para full extract")
+    return all_models
+
+
 def main() -> None:
     """
     Entrypoint do Cloud Run Job para FULL EXTRACT.
@@ -19,18 +39,12 @@ def main() -> None:
 
     # Configurações de execução batch
     batch_size = int(os.getenv("ODOO_BATCH_SIZE", "5000"))
+    prefix = os.getenv("ODOO_MODELS_PREFIX")
     limit = None  # full load nunca usa limit
     fields = None  # extrai todos os campos
 
     # Carrega registry de models
-    registry = ModelsRegistry()
-    models = registry.load()
-
-    if not models:
-        logger.error("❌ Nenhum model encontrado no registry. Job abortado.")
-        raise SystemExit(1)
-
-    logger.info(f"📋 {len(models)} models carregados para full extract")
+    models = _select_models(prefix)
 
     # Executa engine
     result = run_extraction(
