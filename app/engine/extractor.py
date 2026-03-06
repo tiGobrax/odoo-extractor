@@ -6,7 +6,7 @@ from loguru import logger
 
 from app.engine.cursor_store import CursorStore
 from src.odoo_extractor.odoo_client import OdooClient, ModelExtractionError
-from src.storage import save_dataframe_to_gcs
+from src.storage import cleanup_model_folder, save_dataframe_to_gcs
 from src.utils import (
     sanitize_records,
     build_polars_schema,
@@ -294,6 +294,8 @@ def run_extraction(
 
             if not chunk_paths:
                 logger.warning(f"⚠️ Nenhum registro encontrado para {model}")
+                if not incremental:
+                    cleanup_model_folder(model)
                 results.append(
                     ExtractionResult(
                         model=model,
@@ -305,6 +307,9 @@ def run_extraction(
             logger.success(
                 f"✅ {model}: {model_records} registros em {len(chunk_paths)} arquivos"
             )
+
+            if not incremental:
+                cleanup_model_folder(model, keep_timestamp=timestamp_str)
 
             if cursor_field and latest_cursor and cursor_store:
                 _, cursor_value, cursor_id = latest_cursor

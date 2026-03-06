@@ -30,6 +30,59 @@ def _build_object_name(model: str, timestamp_str: str, chunk_suffix: Optional[st
     return f"{base_path}/{safe_model_name}/{file_name}.parquet"
 
 
+def _build_model_prefix(model: str) -> str:
+    """Monta o prefixo da pasta da model no bucket."""
+    base_path = _GCS_BASE_PATH.strip("/")
+    safe_model_name = model.replace(".", "_")
+    return f"{base_path}/{safe_model_name}/"
+
+
+def cleanup_model_folder(model: str, keep_timestamp: Optional[str] = None) -> int:
+    """
+    Remove objetos antigos da pasta da model no GCS.
+
+    Se keep_timestamp for informado, preserva arquivos da execução atual
+    (ex.: 20260306_180846_chunk0001.parquet).
+    Se keep_timestamp for None, remove todos os arquivos da model.
+
+    Returns:
+        int: quantidade de arquivos removidos.
+    """
+    client = _get_storage_client()
+    bucket = client.bucket(_GCS_BUCKET)
+    prefix = _build_model_prefix(model)
+
+    deleted = 0
+    for blob in client.list_blobs(bucket, prefix=prefix):
+        file_name = blob.name.rsplit("/", 1)[-1]
+        if keep_timestamp and (
+            file_name.startswith(f"{keep_timestamp}_")
+            or file_name == f"{keep_timestamp}.parquet"
+        ):
+            continue
+        blob.delete()
+        deleted += 1
+
+    if keep_timestamp:
+        logger.info(
+            "🧹 Limpeza pós-full da model '{}' (preservando timestamp={}): {} arquivos removidos em gs://{}/{}",
+            model,
+            keep_timestamp,
+            deleted,
+            _GCS_BUCKET,
+            prefix,
+        )
+    else:
+        logger.info(
+            "🧹 Limpeza total da model '{}': {} arquivos removidos em gs://{}/{}",
+            model,
+            deleted,
+            _GCS_BUCKET,
+            prefix,
+        )
+    return deleted
+
+
 def save_dataframe_to_gcs(
     df: pl.DataFrame,
     model: str,
