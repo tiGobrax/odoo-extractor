@@ -18,7 +18,7 @@ Extrator de dados do Odoo usando XML-RPC, com suporte a paginação automática,
 
 ## 🧠 Arquitetura em Alto Nível
 
-- **API FastAPI (`MODE=service`)** expõe endpoints para health check, atualização/listagem do registry de models e execução incremental/full do ETL.
+- **API FastAPI (`MODE=service`)** expõe endpoints para health check e manutencao do registry de models no GCS.
 - **Cloud Run Job / batch (`MODE=job`)** reutiliza a mesma engine para execuções batch (`full` e `inc`) sem servidor HTTP.
 - **Engine (`app/engine`)** concentra regra de negócio: controle de cursores, sanitização de registros, escrita em Parquet + upload no GCS.
 - **Cliente Odoo (`src/odoo_extractor`)** encapsula autenticação, paginação e políticas de retry/classificação de erros da API XML-RPC.
@@ -100,12 +100,12 @@ GOOGLE_APPLICATION_CREDENTIALS=/app/creds/odoo-etl.json
 
 | Modo | Variável | Entrypoint | Descrição |
 |------|----------|------------|-----------|
-| Service (API) | `MODE=service` | `uvicorn app.api.app:app` (via `start.sh` ou `python -m app.main`) | Expõe endpoints REST para disparar extrações, atualizar registry e health-check. |
-| Job (batch) | `MODE=job` | `python -m app.main` → `app/jobs/full_extract_job.py` | Executa full extract fora do contexto HTTP, ideal para Cloud Run Job, CronJob ou execução manual. |
+| Service (API) | `MODE=service` | `uvicorn app.api.app:app` (via `start.sh` ou `python -m app.main`) | Uso principal: health-check e manutencao do registry (`/models/update`, `/models/list`). |
+| Job (batch) | `MODE=job` | `python -m app.main` → `app/jobs/full_extract_job.py` ou `app/jobs/incremental_job.py` | Fluxo principal para extracoes `full` e `inc`, ideal para Cloud Run Job, CronJob ou execucao manual. |
 
 Ambos os modos reutilizam `run_extraction` (em `app/engine/extractor.py`). A diferença é somente o wrapper que aciona a engine.
 
-> Importante: os jobs `odoo-extractor-full` e `odoo-extractor-inc` nao substituem completamente o service `odoo-extractor`. Hoje o service continua sendo o caminho operacional para atualizar e inspecionar o registry de models no GCS via `/models/update` e `/models/list`. Sem um processo alternativo para gerar `models_list.csv`, remover o service pode fazer os jobs falharem por falta de registry.
+> Importante: os jobs `odoo-extractor-full` e `odoo-extractor-inc` sao o fluxo principal para execucao de ETL. O service `odoo-extractor` continua necessario apenas para atualizar e inspecionar o registry de models no GCS via `/models/update` e `/models/list`. Sem um processo alternativo para gerar `models_list.csv`, remover o service pode fazer os jobs falharem por falta de registry.
 
 ## ☁️ Armazenamento no Google Cloud Storage
 
@@ -181,7 +181,7 @@ docker compose run --rm -e MODE=job odoo-extractor python -m app.main
 
 ### 4. Testar a API (se usando Opção A)
 
-Execute uma requisição para o endpoint de ETL:
+Para validacao manual, voce pode chamar um endpoint legado de ETL pela API:
 
 ```bash
 curl -X POST "http://127.0.0.1:18080/run/inc"
@@ -200,9 +200,9 @@ Acesse a documentação interativa em:
 | `GET` | `/health` | Health check simples. |
 | `POST` | `/models/update` | Consulta `ir.model`, salva `models_list.csv` no GCS. |
 | `GET` | `/models/list` | Retorna a lista atual armazenada no GCS. |
-| `POST` | `/run/inc` | Executa extração incremental (default, usa cursor write_date/id). |
-| `POST` | `/run/full` | Executa full refresh ignorando cursores. |
-| `POST` | `/etl/run` | Endpoint legado, mantém comportamento incremental. |
+| `POST` | `/run/inc` | Endpoint legado/manual para extração incremental. O fluxo operacional recomendado e o job `odoo-extractor-inc`. |
+| `POST` | `/run/full` | Endpoint legado/manual para full refresh. O fluxo operacional recomendado e o job `odoo-extractor-full`. |
+| `POST` | `/etl/run` | Endpoint legado, mantido por compatibilidade; comportamento incremental. |
 
 Parâmetros opcionais aceitos nos endpoints de ETL:
 - `prefix`: apenas models cujo nome inicia com esse prefixo.
@@ -214,8 +214,8 @@ Parâmetros opcionais aceitos nos endpoints de ETL:
 1. **Atualize o registry** (`/models/update`) sempre que novos models forem habilitados no Odoo. O arquivo `models_list.csv` fica no mesmo bucket/prefixo configurado na engine.
 2. **Liste para verificar** (`/models/list`), especialmente antes de rodar jobs via linha de comando.
 3. **Execute o ETL**:
-   - Incremental (`/run/inc` ou `MODE=service`/`MODE=job` sem limpar cursores) usa `write_date` + `id` como cursor. Models sem `write_date` caem para full refresh automaticamente.
-   - Full refresh (`/run/full` ou `MODE=job`) ignora cursores e não atualiza `last_value`.
+   - Incremental: use preferencialmente o job `odoo-extractor-inc` (`MODE=job`, `JOB_TYPE=inc`). O endpoint `/run/inc` fica apenas como apoio manual/legado. O fluxo usa `write_date` + `id` como cursor; models sem `write_date` caem para full refresh automaticamente.
+   - Full refresh: use preferencialmente o job `odoo-extractor-full` (`MODE=job`, `JOB_TYPE=full`). O endpoint `/run/full` fica apenas como apoio manual/legado. O fluxo ignora cursores e não atualiza `last_value`.
    - Para restringir o Cloud Run Job a uma família de models, defina `ODOO_MODELS_PREFIX` (ex.: `stock`).
 4. **Cursores** são salvos em `cursors/<model>.json` contendo `cursor_field`, `last_value`, `last_id` e `updated_at`. Caso precise reiniciar de um ponto, remova o arquivo correspondente no bucket.
 5. **Falhas controladas**:
@@ -224,7 +224,7 @@ Parâmetros opcionais aceitos nos endpoints de ETL:
 
 Resumo operacional:
 - O service `odoo-extractor` existe para manter o `models_list.csv` atualizado e para oferecer endpoints HTTP de suporte e execucao manual.
-- Os jobs `odoo-extractor-full` e `odoo-extractor-inc` consomem esse registry pronto; eles nao regeneram a lista de models por conta propria.
+- Os jobs `odoo-extractor-full` e `odoo-extractor-inc` sao o caminho recomendado para rodar ETL e consomem esse registry pronto; eles nao regeneram a lista de models por conta propria.
 - Se a operacao usar apenas jobs, mantenha algum mecanismo equivalente ao `/models/update` antes de considerar a remocao do service.
 
 ## 📖 Uso
@@ -307,12 +307,25 @@ O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliz
    ```
 
 3. **Secrets e variáveis sensíveis**
+   O ambiente GCP deste projeto ja usa o secret `odoo-password` no Secret Manager para injetar `ODOO_PASSWORD` no service e nos jobs. Se esse secret ja existir no projeto, apenas garanta que a service account do runtime tenha acesso a ele. Crie uma nova versao ou recrie o secret apenas na configuracao inicial.
+
    ```bash
-   printf 'MINHA_API_KEY' | gcloud secrets create odoo-password --data-file=-
    gcloud secrets add-iam-policy-binding projects/${PROJECT_ID}/secrets/odoo-password \
      --member="serviceAccount:odoo-extractor@${PROJECT_ID}.iam.gserviceaccount.com" \
      --role="roles/secretmanager.secretAccessor"
    ```
+   Se precisar criar o secret pela primeira vez:
+
+   ```bash
+   printf 'MINHA_API_KEY' | gcloud secrets create odoo-password --data-file=-
+   ```
+
+   Se o secret ja existir e voce quiser apenas atualizar o valor:
+
+   ```bash
+   printf 'MINHA_API_KEY' | gcloud secrets versions add odoo-password --data-file=-
+   ```
+
    Configure os demais valores (URL, banco, usuário) via `--set-env-vars`. Para o `ODOO_PASSWORD`, prefira `--set-secrets`, evitando expor o valor.
 
 4. **Deploy da API**
@@ -334,7 +347,7 @@ O container expõe o FastAPI com Uvicorn via `start.sh` e automaticamente utiliz
      `gcloud run logs read odoo-extractor --region ${REGION} --revision <revision>`
    - Quando o erro for “container failed to start”, quase sempre existe um stack trace nos logs de execução indicando variável ausente ou exceção do Python.
 
-Para execuções batch (engine completa sem API), crie um Cloud Run Job reutilizando a mesma imagem e defina `MODE=job` (o `start.sh` já chama `python -m app.main`). Também é possível orquestrar deltas chamando os endpoints `/run/inc` (incremental) ou `/run/full` (full refresh) via DAG sem necessidade de autenticação adicional.
+Para execuções batch (engine completa sem API), crie Cloud Run Jobs reutilizando a mesma imagem e defina `MODE=job` com `JOB_TYPE=full` ou `JOB_TYPE=inc` (o `start.sh` ja chama `python -m app.main`). Os endpoints `/run/inc` e `/run/full` permanecem disponiveis apenas para suporte manual, troubleshooting ou compatibilidade.
 
 Mesmo quando `full` e `inc` sao executados exclusivamente por Cloud Run Jobs, mantenha o service `odoo-extractor` enquanto ele for responsavel por atualizar o registry de models no GCS. Os jobs dependem de `models_list.csv` ja existente.
 
@@ -360,7 +373,7 @@ Se preferir automatizar toda a infraestrutura GCP (Artifact Registry, Secret Man
    terraform apply
    ```
 
-O módulo habilita as APIs necessárias, cria (ou confirma) o repositório do Artifact Registry, provisiona a service account com as permissões corretas, cadastra o segredo `odoo-password` e implanta o Cloud Run Service `odoo-extractor` e os jobs batch apontando para a imagem informada. Ajuste `allow_unauthenticated=false` se quiser proteger o endpoint e forneça um `invoker_identity` para controle fino de acesso.
+O módulo habilita as APIs necessárias, cria (ou confirma) o repositório do Artifact Registry, provisiona a service account com as permissões corretas, garante o acesso ao segredo `odoo-password` e implanta o Cloud Run Service `odoo-extractor` e os jobs batch apontando para a imagem informada. Ajuste `allow_unauthenticated=false` se quiser proteger o endpoint e forneça um `invoker_identity` para controle fino de acesso.
 
 No estado atual do projeto, o Terraform continua criando o service porque ele ainda tem funcao operacional: manter o registry de models via API. So remova esse recurso quando existir outro fluxo para gerar e validar `models_list.csv`.
 
